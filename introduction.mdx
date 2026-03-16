@@ -1,0 +1,86 @@
+---
+title: "Introduction"
+description: "What the Realtime Mesh Component is, why it exists, and when to use it over ProceduralMeshComponent."
+---
+
+## What is the Realtime Mesh Component?
+
+The **Realtime Mesh Component** (RMC) is a high-performance Unreal Engine 5 plugin for generating and updating procedural geometry at runtime. It was created by **Chris Conway (Koderz)** at TriAxis Games and has been in production use for over a decade — trusted by indie developers, universities, and Fortune 500 companies in shipped titles and real-time applications.
+
+Version **5.3.2** of the plugin supports **Unreal Engine 5.0 and above**.
+
+The RMC is a direct, production-ready replacement for Unreal's built-in `ProceduralMeshComponent` (PMC). It ships as a plugin you add to your project and exposes both a C++ and Blueprint API.
+
+<Note>
+  Join the community on [Discord](https://discord.gg/KGvBBTv) for support, examples, and discussion.
+</Note>
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="High-performance rendering" icon="bolt">
+    Batched GPU updates and an optimized rendering pipeline. Far more efficient than `ProceduralMeshComponent` for meshes that change frequently.
+  </Card>
+  <Card title="LOD support" icon="layer-group">
+    Define multiple Level of Detail levels for procedural meshes to reduce GPU load at distance, using the same `FRealtimeMeshLODConfig` API.
+  </Card>
+  <Card title="Blueprint API" icon="diagram-project">
+    Full Blueprint support via `ARealtimeMeshActor`, `MakeMeshBuilder`, and `CreateSectionGroup` — no C++ required for common workflows.
+  </Card>
+  <Card title="Collision generation" icon="shield">
+    Automatic complex and simple collision from mesh data, with async Chaos physics cooking. Enable per-section with `bShouldCreateCollision`.
+  </Card>
+  <Card title="Nanite support" icon="cube">
+    First-class Nanite integration via `SetNaniteResources` for virtualized geometry on high-polygon procedural meshes.
+  </Card>
+  <Card title="Lumen integration" icon="sun">
+    Distance field and card representation APIs (`SetDistanceField`, `SetCardRepresentation`) for full Lumen global illumination on runtime geometry.
+  </Card>
+  <Card title="Network replication" icon="network-wired">
+    The `URealtimeMeshComponent` is fully replication-aware. `URealtimeMesh` implements `IsSupportedForNetworking()` so mesh references replicate across clients.
+  </Card>
+  <Card title="Type-safe stream API" icon="code">
+    The `TRealtimeMeshBuilderLocal` and `TRealtimeMeshStreamBuilder` templates provide compile-time type-checked mesh construction with zero-copy GPU upload paths.
+  </Card>
+</CardGroup>
+
+## Architecture overview
+
+The RMC separates the **data model** from the **rendering component**:
+
+- **`URealtimeMeshComponent`** — the scene component you attach to actors. It holds a reference to a `URealtimeMesh` and drives rendering and collision.
+- **`URealtimeMesh`** (abstract base) — owns the mesh data, material slots, and LOD hierarchy. You never instantiate this directly.
+- **`URealtimeMeshSimple`** — the concrete mesh type you use for most work. It mirrors the simplicity of `ProceduralMeshComponent` while exposing the full capability of the RMC.
+- **`FRealtimeMeshStreamSet`** — the container for typed vertex/index data streams (positions, tangents, UVs, colors, triangles, poly groups). This is what you populate and hand to `CreateSectionGroup`.
+- **`ARealtimeMeshActor`** — a convenience actor base class with a pre-attached `URealtimeMeshComponent` and an `OnGenerateMesh` event for deferring mesh generation out of the construction script.
+
+Mesh geometry is organized as: **LOD → SectionGroup → Section**. A `SectionGroup` holds one `FRealtimeMeshStreamSet` (the actual vertex/index buffers). Sections within a group reference ranges of those buffers and map to material slots.
+
+## RMC vs ProceduralMeshComponent
+
+| | RMC | ProceduralMeshComponent |
+|---|---|---|
+| Runtime performance | High — batched GPU updates | Moderate — full recreation on update |
+| LOD support | Yes | No |
+| Nanite support | Yes | No |
+| Lumen (distance fields) | Yes | No |
+| Blueprint API | Full | Full |
+| Poly group / multi-material | Yes, per section group | Yes, per section |
+| Network replication | Yes | Partial |
+| Async collision cooking | Yes | No |
+| Stream type safety | Compile-time checked | None |
+
+Use **RMC** when you need any of: dynamic geometry that updates frequently, LODs, Nanite, Lumen, async collision, or the Blueprint-first `ARealtimeMeshActor` workflow.
+
+Use **ProceduralMeshComponent** only if you are maintaining a legacy codebase that you cannot migrate and you do not need the features listed above.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Add RMC to your UE5 project from the Marketplace or from source.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create a procedural mesh in under five minutes.
+  </Card>
+</CardGroup>

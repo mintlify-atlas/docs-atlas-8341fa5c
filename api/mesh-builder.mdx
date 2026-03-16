@@ -1,0 +1,292 @@
+---
+title: "Blueprint Mesh Builder"
+description: "Blueprint-friendly API for constructing mesh geometry with URealtimeMeshLocalBuilder."
+---
+
+The Blueprint mesh builder system wraps the C++ stream builder in `UObject`-based types so that Blueprints can build mesh data without writing C++. The three core classes are `URealtimeMeshStream`, `URealtimeMeshStreamSet`, and `URealtimeMeshLocalBuilder`.
+
+---
+
+## FRealtimeMeshBasicVertex
+
+A convenience struct combining all common per-vertex attributes into a single Blueprint-readable struct.
+
+```cpp
+USTRUCT(BlueprintType)
+struct FRealtimeMeshBasicVertex
+```
+
+<ResponseField name="Position" type="FVector">
+  Vertex position in local space. Default: `FVector::Zero()`.
+</ResponseField>
+
+<ResponseField name="Normal" type="FVector">
+  Surface normal. Default: `FVector::UnitZ()` (pointing up).
+</ResponseField>
+
+<ResponseField name="Tangent" type="FVector">
+  Tangent direction. Default: `FVector::UnitX()`.
+</ResponseField>
+
+<ResponseField name="Binormal" type="FVector">
+  Binormal (bitangent) direction. Default: `FVector::UnitY()`.
+</ResponseField>
+
+<ResponseField name="Color" type="FLinearColor">
+  Per-vertex color. Default: `FLinearColor::Transparent`.
+</ResponseField>
+
+<ResponseField name="UV0" type="FVector2D">
+  First UV channel. Default: `FVector2D::Zero()`.
+</ResponseField>
+
+<ResponseField name="UV1" type="FVector2D">
+  Second UV channel. Default: `FVector2D::Zero()`.
+</ResponseField>
+
+<ResponseField name="UV2" type="FVector2D">
+  Third UV channel. Default: `FVector2D::Zero()`.
+</ResponseField>
+
+<ResponseField name="UV3" type="FVector2D">
+  Fourth UV channel. Default: `FVector2D::Zero()`.
+</ResponseField>
+
+---
+
+## ERealtimeMeshSimpleStreamType
+
+Selects the data format for a stream when using the Blueprint API.
+
+| Value | C++ type | Bytes/element |
+|---|---|---|
+| `Unknown` | — | — |
+| `Int16` | `int16` | 2 |
+| `UInt16` | `uint16` | 2 |
+| `Int32` | `int32` | 4 |
+| `UInt32` | `uint32` | 4 |
+| `Float` | `float` | 4 |
+| `Vector2` | `FVector2f` | 8 |
+| `Vector3` | `FVector3f` | 12 |
+| `HalfVector2` | `FVector2DHalf` | 4 |
+| `PackedNormal` | `FPackedNormal` | 4 |
+| `PackedRGBA16N` | `FPackedRGBA16N` | 8 |
+| `Triangle16` | `TIndex3<uint16>` | 6 |
+| `Triangle32` | `TIndex3<uint32>` | 12 |
+
+---
+
+## URealtimeMeshStream
+
+A `UObject` wrapper around `FRealtimeMeshStream`. Provides Blueprint-callable getters and setters for all supported element types.
+
+```cpp
+UCLASS(BlueprintType)
+class URealtimeMeshStream : public UObject
+```
+
+### Buffer Operations
+
+```cpp
+int32 GetNum(URealtimeMeshStream*& Builder);
+bool  IsIndexValid(URealtimeMeshStream*& Builder, int32 Index);
+bool  IsEmpty(URealtimeMeshStream*& Builder);
+void  Reserve(URealtimeMeshStream*& Builder, int32 ExpectedSize);
+void  Shrink(URealtimeMeshStream*& Builder);
+void  Empty(URealtimeMeshStream*& Builder, int32 ExpectedSize = 0);
+void  SetNumUninitialized(URealtimeMeshStream*& Builder, int32 NewNum);
+void  SetNumZeroed(URealtimeMeshStream*& Builder, int32 NewNum);
+```
+
+### Row Operations
+
+```cpp
+int32 AddUninitialized(URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 NumToAdd);
+int32 AddZeroed(URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 NumToAdd);
+FRealtimeMeshStreamRowPtr EditRow(URealtimeMeshStream*& Builder, int32 Index);
+```
+
+### Typed Add / Set / Get
+
+```cpp
+// Add methods return the new row index
+int32 AddInt    (URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 NewValue);
+int32 AddFloat  (URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, float NewValue);
+int32 AddVector2(URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, FVector2D NewValue);
+int32 AddVector3(URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, FVector NewValue);
+int32 AddVector4(URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, FVector4 NewValue);
+
+// Set methods write to an existing index
+void SetInt    (URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 Index, int32 NewValue);
+void SetFloat  (URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 Index, float NewValue);
+void SetVector2(URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 Index, FVector2D NewValue);
+void SetVector3(URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 Index, FVector NewValue);
+void SetVector4(URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 Index, FVector4 NewValue);
+
+// Get methods read from a row index
+int32    GetInt    (URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 Index);
+float    GetFloat  (URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 Index);
+FVector2D GetVector2(URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 Index);
+FVector  GetVector3(URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 Index);
+FVector4 GetVector4(URealtimeMeshStream*& Builder, FRealtimeMeshStreamRowPtr& Row, int32 Index);
+```
+
+---
+
+## URealtimeMeshStreamSet
+
+A `UObject` wrapper around `FRealtimeMeshStreamSet`. Acts as the container passed to `URealtimeMeshSimple::CreateSectionGroup`.
+
+```cpp
+UCLASS(BlueprintType)
+class URealtimeMeshStreamSet : public UObject
+```
+
+```cpp
+void AddStream(URealtimeMeshStream* Stream);
+void RemoveStream(const FRealtimeMeshStreamKey& StreamKey);
+void Reset();
+
+// Create a local builder backed by this stream set
+URealtimeMeshLocalBuilder* MakeLocalMeshBuilder(
+    ERealtimeMeshSimpleStreamConfig WantedTangents     = Normal,
+    ERealtimeMeshSimpleStreamConfig WantedTexCoords    = Normal,
+    bool bWants32BitIndices                            = false,
+    ERealtimeMeshSimpleStreamConfig WantedPolyGroupType = None,
+    bool bWantsColors                                  = true,
+    int32 WantedTexCoordChannels                       = 1,
+    bool bKeepExistingData                             = true
+);
+```
+
+---
+
+## URealtimeMeshLocalBuilder
+
+Inherits from `URealtimeMeshStreamSet`. Adds vertex and triangle building methods on top of the stream set.
+
+```cpp
+UCLASS(BlueprintType)
+class URealtimeMeshLocalBuilder : public URealtimeMeshStreamSet
+```
+
+### Initialization
+
+```cpp
+URealtimeMeshLocalBuilder* Initialize(
+    ERealtimeMeshSimpleStreamConfig WantedTangents     = Normal,
+    ERealtimeMeshSimpleStreamConfig WantedTexCoords    = Normal,
+    bool bWants32BitIndices                            = false,
+    ERealtimeMeshSimpleStreamConfig WantedPolyGroupType = None,
+    bool bWantsColors                                  = true,
+    int32 WantedTexCoordChannels                       = 1,
+    bool bKeepExistingData                             = true
+);
+```
+
+Returns `this` for method chaining.
+
+### Enable / Disable Streams
+
+```cpp
+URealtimeMeshLocalBuilder* EnableTangents(bool bUseHighPrecision = false);
+URealtimeMeshLocalBuilder* DisableTangents();
+
+URealtimeMeshLocalBuilder* EnableColors();
+URealtimeMeshLocalBuilder* DisableColors();
+
+URealtimeMeshLocalBuilder* EnableTexCoords(int32 NumChannels = 1, bool bUseHighPrecision = false);
+URealtimeMeshLocalBuilder* DisableTexCoords();
+
+URealtimeMeshLocalBuilder* EnableDepthOnlyTriangles(bool bUse32BitIndices = false);
+URealtimeMeshLocalBuilder* DisableDepthOnlyTriangles();
+
+URealtimeMeshLocalBuilder* EnablePolyGroups(bool bUse32BitIndices = false);
+URealtimeMeshLocalBuilder* DisablePolyGroups();
+```
+
+All return `this` for chaining.
+
+### Adding Vertices
+
+```cpp
+// Add a vertex from a FRealtimeMeshBasicVertex struct
+int32 AddVertex(
+    URealtimeMeshLocalBuilder*& Builder,
+    const FRealtimeMeshBasicVertex& Vertex
+);
+
+// Edit an existing vertex by index — only writes fields where bWrite* is true
+void EditVertex(
+    URealtimeMeshLocalBuilder*& Builder,
+    int32 Index,
+    FVector Position, bool bWritePosition,
+    FVector Normal,   bool bWriteNormal,
+    FVector Tangent,  bool bWriteTangent,
+    FLinearColor Color, bool bWriteColor,
+    FVector2D UV0, bool bWriteUV0,
+    FVector2D UV1, bool bWriteUV1,
+    FVector2D UV2, bool bWriteUV2,
+    FVector2D UV3, bool bWriteUV3
+);
+
+void GetVertex(
+    URealtimeMeshLocalBuilder*& Builder,
+    int32 Index,
+    FVector& Position, FVector& Normal, FVector& Tangent,
+    FLinearColor& Color,
+    FVector2D& UV0, FVector2D& UV1, FVector2D& UV2, FVector2D& UV3
+);
+```
+
+### Adding Triangles
+
+```cpp
+int32 AddTriangle(
+    URealtimeMeshLocalBuilder*& Builder,
+    int32 V0, int32 V1, int32 V2,
+    int32 PolyGroupIndex = 0
+);
+
+void SetTriangle(
+    URealtimeMeshLocalBuilder*& Builder,
+    int32 Index,
+    int32 V0, int32 V1, int32 V2,
+    int32 PolyGroupIndex = 0
+);
+
+void GetTriangle(
+    URealtimeMeshLocalBuilder*& Builder,
+    int32 Index,
+    int32& V0, int32& V1, int32& V2,
+    int32& PolyGroupIndex
+);
+```
+
+---
+
+## Blueprint Example
+
+```
+Event OnGenerateMesh
+  ├─ Get RealtimeMeshComponent → InitializeRealtimeMesh (URealtimeMeshSimple)
+  ├─ MakeMeshBuilder → (returns URealtimeMeshLocalBuilder)
+  ├─ AddVertex (Position=0,0,0 Normal=0,0,1 Tangent=1,0,0 UV0=0,0)
+  ├─ AddVertex (Position=100,0,0 ...)
+  ├─ AddVertex (Position=0,100,0 ...)
+  ├─ AddTriangle (0, 1, 2)
+  └─ CreateSectionGroupUnique (LODKey=0, MeshData=builder)
+```
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Stream Builder" href="/api/stream-builder">
+    The C++ equivalent with lower overhead.
+  </Card>
+  <Card title="URealtimeMeshSimple" href="/api/realtime-mesh-simple">
+    Where CreateSectionGroup is called with the resulting stream set.
+  </Card>
+</CardGroup>

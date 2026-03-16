@@ -1,0 +1,133 @@
+---
+title: "Stream Type Reference"
+description: "Buffer types for mesh vertex and index data."
+---
+
+Choosing the right element types for each stream determines memory usage, GPU bandwidth, and visual quality. This page documents the available types and their trade-offs.
+
+---
+
+## Tangent Types
+
+Tangent streams store pairs of (Normal, Tangent) as `TRealtimeMeshTangents<T>`. The W component of the Normal encodes the binormal sign (+1 or −1).
+
+| Type | C++ alias | Bytes/vertex | Precision |
+|---|---|---|---|
+| `FPackedNormal` | `FRealtimeMeshTangentsNormalPrecision` | 8 | 8-bit int per component (~0.008 angular error) |
+| `FPackedRGBA16N` | `FRealtimeMeshTangentsHighPrecision` | 16 | 16-bit int per component (~0.00003 angular error) |
+| `FVector4f` | — | 32 | Full 32-bit float |
+
+```cpp
+using FRealtimeMeshTangentsNormalPrecision = TRealtimeMeshTangents<FPackedNormal>;
+using FRealtimeMeshTangentsHighPrecision  = TRealtimeMeshTangents<FPackedRGBA16N>;
+```
+
+<Tip>
+  Use `FPackedNormal` (Normal precision) for most meshes. Switch to `FPackedRGBA16N` only when you observe visible normal-map artifacts on curved surfaces.
+</Tip>
+
+---
+
+## UV (Texture Coordinate) Types
+
+UV streams store one or more channels as `TRealtimeMeshTexCoords<ChannelType, ChannelCount>`.
+
+| Type | Bytes/channel | Range | Precision |
+|---|---|---|---|
+| `FVector2DHalf` | 4 | [−65504, 65504] | ~3 decimal digits |
+| `FVector2f` | 8 | Full float range | ~7 decimal digits |
+
+```cpp
+// Normal precision aliases (half-float)
+using FRealtimeMeshTexCoordsNormal  = TRealtimeMeshTexCoordsNormal<1>; // 1 channel
+using FRealtimeMeshTexCoordsNormal2 = TRealtimeMeshTexCoordsNormal<2>; // 2 channels
+using FRealtimeMeshTexCoordsNormal3 = TRealtimeMeshTexCoordsNormal<3>;
+using FRealtimeMeshTexCoordsNormal4 = TRealtimeMeshTexCoordsNormal<4>;
+
+// High precision aliases (full float)
+using FRealtimeMeshTexCoordsHighPri  = TRealtimeMeshTexCoordsHighPri<1>;
+using FRealtimeMeshTexCoordsHighPri2 = TRealtimeMeshTexCoordsHighPri<2>;
+using FRealtimeMeshTexCoordsHighPri3 = TRealtimeMeshTexCoordsHighPri<3>;
+using FRealtimeMeshTexCoordsHighPri4 = TRealtimeMeshTexCoordsHighPri<4>;
+```
+
+---
+
+## Index Types
+
+Index streams store triangles as `TIndex3<T>`. The index type limits the maximum number of unique vertices a single section group can reference.
+
+| Type | Bytes/triangle | Max vertex index |
+|---|---|---|
+| `TIndex3<uint16>` (`FIndex3US`) | 6 | 65 535 |
+| `TIndex3<uint32>` (`FIndex3UI`) | 12 | 4 294 967 295 |
+
+```cpp
+using FIndex3UI = TIndex3<uint32>;
+using FIndex3US = TIndex3<uint16>;
+```
+
+<Warning>
+  If you use `uint16` indices and add more than 65 535 vertices to a single section group, the builder will overflow. Switch to `uint32` for large meshes.
+</Warning>
+
+---
+
+## Polygon Group Types
+
+Polygon group streams store one `FRealtimeMeshPolygonGroupRange` per segment. The format is fixed:
+
+```cpp
+struct FRealtimeMeshPolygonGroupRange
+{
+    int32 StartIndex;        // first index in this segment
+    int32 Count;             // number of indices
+    int32 PolygonGroupIndex; // material / section index
+};
+```
+
+---
+
+## Color Types
+
+| Type | Bytes/vertex | Notes |
+|---|---|---|
+| `FColor` | 4 | 8-bit BGRA — most memory-efficient. |
+| `FLinearColor` | 16 | 32-bit float RGBA — use when HDR vertex color values are needed. |
+
+---
+
+## Memory Comparison
+
+Per-vertex memory cost for common configurations (excluding position, which is always 12 bytes as `FVector3f`):
+
+| Configuration | Tangents | UVs (×1) | Color | Total extra |
+|---|---|---|---|---|
+| Minimal (Normal) | 8 | 4 | — | 12 bytes |
+| Minimal + Color | 8 | 4 | 4 | 16 bytes |
+| High Precision | 16 | 8 | — | 24 bytes |
+| High Precision + Color | 16 | 8 | 4 | 28 bytes |
+
+---
+
+## Recommendation Guide
+
+| Scenario | Tangents | UVs | Indices |
+|---|---|---|---|
+| Generic procedural mesh | `FPackedNormal` | `FVector2DHalf` | `uint16` |
+| Large terrain (> 64K vertices) | `FPackedNormal` | `FVector2DHalf` | `uint32` |
+| High-quality character or prop | `FPackedRGBA16N` | `FVector2f` | `uint16` |
+| Realtime deformation / cloth | `FPackedRGBA16N` | `FVector2f` | `uint32` |
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Stream Builder" href="/api/stream-builder">
+    How to use these types with the C++ builder API.
+  </Card>
+  <Card title="Data Streams" href="/api/data-streams">
+    FRealtimeMeshStream and FRealtimeMeshStreamSet reference.
+  </Card>
+</CardGroup>

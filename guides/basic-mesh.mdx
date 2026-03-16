@@ -1,0 +1,296 @@
+---
+title: "Creating a Basic Mesh"
+description: "Walk through creating your first procedural mesh using ARealtimeMeshActor and TRealtimeMeshBuilderLocal."
+---
+
+This guide creates a simple two-sided triangle — the "Hello World" of procedural mesh generation in RMC. You will learn the core pattern that every RMC mesh follows: build a `FRealtimeMeshStreamSet`, hand it to `URealtimeMeshSimple`, and configure sections.
+
+## Prerequisites
+
+- RMC plugin installed and enabled (see [Installation](/installation))
+- A C++ Unreal Engine 5 project
+- Basic familiarity with `AActor` subclasses
+
+## Overview of the pattern
+
+Every mesh in RMC is composed of three layers:
+
+1. **StreamSet** — raw buffers (positions, normals, UVs, triangles, etc.)
+2. **SectionGroup** — one or more sections that share those buffers
+3. **Section** — a renderable slice of the group tied to a material slot
+
+The `TRealtimeMeshBuilderLocal` helper manages all three in one convenient API.
+
+## Step 1: Create the actor class
+
+Subclass `ARealtimeMeshActor`. The base class already owns a `URealtimeMeshComponent` and wires up the `OnGenerateMesh` event.
+
+```cpp
+// RealtimeMeshBasic.h
+#pragma once
+
+#include "CoreMinimal.h"
+#include "RealtimeMeshActor.h"
+#include "RealtimeMeshBasic.generated.h"
+
+UCLASS()
+class MYPROJECT_API ARealtimeMeshBasic : public ARealtimeMeshActor
+{
+    GENERATED_BODY()
+public:
+    ARealtimeMeshBasic();
+protected:
+    virtual void OnConstruction(const FTransform& Transform) override;
+};
+```
+
+<Note>
+`ARealtimeMeshActor` exposes both `OnConstruction` (fires every time the actor is placed or properties change in the editor) and the `OnGenerateMesh` Blueprint-native event. For pure C++ workflows, overriding `OnConstruction` is the simplest approach.
+</Note>
+
+## Step 2: Initialize URealtimeMeshSimple
+
+In the `.cpp`, call `InitializeRealtimeMesh<URealtimeMeshSimple>()` on the component. This replaces any previous mesh type and returns the typed mesh object.
+
+```cpp
+// RealtimeMeshBasic.cpp
+#include "RealtimeMeshBasic.h"
+#include "RealtimeMeshSimple.h"
+
+using namespace RealtimeMesh;
+
+ARealtimeMeshBasic::ARealtimeMeshBasic()
+{
+    PrimaryActorTick.bCanEverTick = false;
+}
+
+void ARealtimeMeshBasic::OnConstruction(const FTransform& Transform)
+{
+    Super::OnConstruction(Transform);
+
+    // Initialize to a simple mesh — behaves like ProceduralMeshComponent
+    // but with better performance and more features.
+    URealtimeMeshSimple* RealtimeMesh =
+        GetRealtimeMeshComponent()->InitializeRealtimeMesh<URealtimeMeshSimple>();
+```
+
+## Step 3: Create a StreamSet and builder
+
+`FRealtimeMeshStreamSet` is the container for all vertex and index data. Wrap it with `TRealtimeMeshBuilderLocal` to get a high-level API for adding vertices and triangles.
+
+The template parameters control the on-disk format of each stream:
+
+| Parameter | Example value | Meaning |
+|-----------|---------------|---------|
+| Index type | `uint16` | 16-bit triangle indices (supports up to 65 535 vertices) |
+| Tangent type | `FPackedNormal` | Normal-precision packed tangents |
+| TexCoord type | `FVector2DHalf` | Half-precision UV coordinates |
+| TexCoord channels | `1` | One UV channel |
+
+```cpp
+    FRealtimeMeshStreamSet StreamSet;
+
+    // TRealtimeMeshBuilderLocal<IndexType, TangentType, TexCoordType, NumTexCoords>
+    TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 1> Builder(StreamSet);
+
+    // Enable the optional streams we want
+    Builder.EnableTangents();   // Adds normal + tangent streams
+    Builder.EnableTexCoords();  // Adds texture coordinate stream
+    Builder.EnableColors();     // Adds per-vertex color stream
+
+    // Poly groups let a single StreamSet drive multiple material sections.
+    // Each triangle carries a group index that maps it to a Section.
+    Builder.EnablePolyGroups();
+```
+
+## Step 4: Add vertices
+
+`AddVertex` returns a chainable handle. Call `.SetNormalAndTangent()`, `.SetColor()`, and `.SetTexCoord()` to populate the optional streams you enabled above.
+
+```cpp
+    // V0 — bottom left, red
+    int32 V0 = Builder.AddVertex(FVector3f(-50.0f, 0.0f, 0.0f))
+        .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f))
+        .SetColor(FColor::Red)
+        .SetTexCoord(FVector2f(0.0f, 0.0f));
+
+    // V1 — top center, green
+    int32 V1 = Builder.AddVertex(FVector3f(0.0f, 0.0f, 100.0f))
+        .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f))
+        .SetColor(FColor::Green)
+        .SetTexCoord(FVector2f(0.5f, 1.0f));
+
+    // V2 — bottom right, blue
+    int32 V2 = Builder.AddVertex(FVector3f(50.0f, 0.0f, 0.0f))
+        .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f))
+        .SetColor(FColor::Blue)
+        .SetTexCoord(FVector2f(1.0f, 0.0f));
+```
+
+<Tip>
+Vertices are wound **counter-clockwise** when viewed from the front face. For a single flat triangle you often want to add it twice (reversed) so the back face is also visible.
+</Tip>
+
+## Step 5: Add triangles
+
+The last argument to `AddTriangle` is the **poly group index**. Triangles with the same index end up in the same rendered section.
+
+```cpp
+    // Front face — poly group 0 → material slot 0
+    Builder.AddTriangle(V0, V1, V2, 0);
+
+    // Back face  — poly group 1 → material slot 1
+    // Reversed winding makes the back face visible from behind.
+    Builder.AddTriangle(V2, V1, V0, 1);
+```
+
+## Step 6: Set up material slots and create the section group
+
+```cpp
+    // Register named material slots on the mesh asset
+    RealtimeMesh->SetupMaterialSlot(0, "PrimaryMaterial");
+    RealtimeMesh->SetupMaterialSlot(1, "SecondaryMaterial");
+
+    // A SectionGroupKey identifies this group within LOD 0
+    const FRealtimeMeshSectionGroupKey GroupKey =
+        FRealtimeMeshSectionGroupKey::Create(0, FName("TestTriangle"));
+
+    // SectionKeys reference individual poly-group sections inside the group
+    const FRealtimeMeshSectionKey PolyGroup0SectionKey =
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 0);
+    const FRealtimeMeshSectionKey PolyGroup1SectionKey =
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 1);
+
+    // Upload the StreamSet. Because poly groups are enabled,
+    // sections are created automatically for each group index found.
+    RealtimeMesh->CreateSectionGroup(GroupKey, StreamSet);
+
+    // Assign material slots to the auto-created sections
+    RealtimeMesh->UpdateSectionConfig(PolyGroup0SectionKey, FRealtimeMeshSectionConfig(0));
+    RealtimeMesh->UpdateSectionConfig(PolyGroup1SectionKey, FRealtimeMeshSectionConfig(1));
+}
+```
+
+## Complete source
+
+For reference, the full file from the official examples:
+
+<Tabs>
+  <Tab title="RealtimeMeshBasic.h">
+```cpp
+// Copyright (c) 2015-2025 TriAxis Games, L.L.C. All Rights Reserved.
+#pragma once
+
+#include "CoreMinimal.h"
+#include "RealtimeMeshActor.h"
+#include "GameFramework/Actor.h"
+#include "RealtimeMeshBasic.generated.h"
+
+UCLASS()
+class REALTIMEMESHEXAMPLES_API ARealtimeMeshBasic : public ARealtimeMeshActor
+{
+    GENERATED_BODY()
+public:
+    ARealtimeMeshBasic();
+protected:
+    virtual void OnConstruction(const FTransform& Transform) override;
+};
+```
+  </Tab>
+  <Tab title="RealtimeMeshBasic.cpp">
+```cpp
+// Copyright (c) 2015-2025 TriAxis Games, L.L.C. All Rights Reserved.
+#include "RealtimeMeshBasic.h"
+#include "RealtimeMeshSimple.h"
+
+using namespace RealtimeMesh;
+
+ARealtimeMeshBasic::ARealtimeMeshBasic()
+{
+    PrimaryActorTick.bCanEverTick = false;
+}
+
+void ARealtimeMeshBasic::OnConstruction(const FTransform& Transform)
+{
+    Super::OnConstruction(Transform);
+
+    URealtimeMeshSimple* RealtimeMesh =
+        GetRealtimeMeshComponent()->InitializeRealtimeMesh<URealtimeMeshSimple>();
+
+    FRealtimeMeshStreamSet StreamSet;
+    TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 1> Builder(StreamSet);
+
+    Builder.EnableTangents();
+    Builder.EnableTexCoords();
+    Builder.EnableColors();
+    Builder.EnablePolyGroups();
+
+    int32 V0 = Builder.AddVertex(FVector3f(-50.0f, 0.0f, 0.0f))
+        .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f))
+        .SetColor(FColor::Red)
+        .SetTexCoord(FVector2f(0.0f, 0.0f));
+
+    int32 V1 = Builder.AddVertex(FVector3f(0.0f, 0.0f, 100.0f))
+        .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f))
+        .SetColor(FColor::Green)
+        .SetTexCoord(FVector2f(0.5f, 1.0f));
+
+    int32 V2 = Builder.AddVertex(FVector3f(50.0f, 0.0f, 0.0f))
+        .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f))
+        .SetColor(FColor::Blue)
+        .SetTexCoord(FVector2f(1.0f, 0.0f));
+
+    Builder.AddTriangle(V0, V1, V2, 0);
+    Builder.AddTriangle(V2, V1, V0, 1);
+
+    RealtimeMesh->SetupMaterialSlot(0, "PrimaryMaterial");
+    RealtimeMesh->SetupMaterialSlot(1, "SecondaryMaterial");
+
+    const FRealtimeMeshSectionGroupKey GroupKey =
+        FRealtimeMeshSectionGroupKey::Create(0, FName("TestTriangle"));
+    const FRealtimeMeshSectionKey PolyGroup0SectionKey =
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 0);
+    const FRealtimeMeshSectionKey PolyGroup1SectionKey =
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 1);
+
+    RealtimeMesh->CreateSectionGroup(GroupKey, StreamSet);
+    RealtimeMesh->UpdateSectionConfig(PolyGroup0SectionKey, FRealtimeMeshSectionConfig(0));
+    RealtimeMesh->UpdateSectionConfig(PolyGroup1SectionKey, FRealtimeMeshSectionConfig(1));
+}
+```
+  </Tab>
+</Tabs>
+
+## Seeing your mesh in the editor
+
+<Steps>
+  <Step title="Compile and refresh the editor">
+    Build the project (`Ctrl+Shift+B` in Visual Studio or use **Tools > Compile** in UE). Once the editor refreshes, your `ARealtimeMeshBasic` class appears in the **Place Actors** panel.
+  </Step>
+  <Step title="Drag the actor into the level">
+    Drag an instance into the viewport. `OnConstruction` fires immediately and the triangle renders in world space.
+  </Step>
+  <Step title="Assign materials">
+    Select the actor, expand the **Realtime Mesh Component** in the Details panel, and assign materials to the `PrimaryMaterial` and `SecondaryMaterial` slots.
+  </Step>
+  <Step title="Iterate">
+    Change vertex positions in `OnConstruction` and re-compile — the mesh updates live in the editor each time you save and hot-reload.
+  </Step>
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Multiple UV Channels" icon="layer-group" href="/guides/multiple-uvs">
+    Store multiple sets of UV coordinates to drive complex material effects.
+  </Card>
+  <Card title="LOD Example" icon="chart-line" href="/guides/lod-example">
+    Add discrete LOD levels to control triangle count at distance.
+  </Card>
+  <Card title="Collision Setup" icon="shield" href="/guides/collision-setup">
+    Give your procedural mesh physics collision.
+  </Card>
+  <Card title="Blueprint Usage" icon="puzzle-piece" href="/guides/blueprint-usage">
+    Drive mesh generation entirely from Blueprint without C++.
+  </Card>
+</CardGroup>

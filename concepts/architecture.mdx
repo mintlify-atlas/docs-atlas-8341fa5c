@@ -1,0 +1,134 @@
+---
+title: "Architecture overview"
+description: "How the Realtime Mesh Component separates game-thread data from the render-thread proxy, and how updates flow between them."
+---
+
+The Realtime Mesh Component (RMC) uses a two-layer architecture that keeps mesh data on the game thread while sending minimal, batched commands to the render thread. This separation is what makes efficient incremental updates possible — you can change a single section or stream without rebuilding the entire mesh proxy.
+
+## The two layers
+
+```
+Game Thread                         Render Thread
+─────────────────────────────────   ─────────────────────────────────
+URealtimeMeshComponent              FRealtimeMeshSceneProxy
+  └─ URealtimeMesh (UObject)          └─ FRealtimeMeshProxyCommandBatch
+       └─ FRealtimeMesh (shared)           └─ GPU vertex / index buffers
+            ├─ FRealtimeMeshLOD
+            │    └─ FRealtimeMeshSectionGroup
+            │         ├─ FRealtimeMeshSection
+            │         └─ FRealtimeMeshStreamSet
+            └─ FRealtimeMeshConfig
+```
+
+The game-thread layer owns all mesh data as standard C++ structs. The render-thread layer is a proxy that holds GPU resources. The two communicate exclusively through a batched command queue — no mesh data is rebuilt from scratch on every update.
+
+## URealtimeMeshComponent
+
+`URealtimeMeshComponent` is a standard `UMeshComponent` subclass. Its only mesh-specific job is to hold a reference to a `URealtimeMesh` object and relay events from that object to the rendering system:
+
+```cpp
+// RealtimeMeshComponent.h
+UPROPERTY(EditAnywhere, BlueprintReadOnly, Replicated, Category = RealtimeMesh)
+TObjectPtr<URealtimeMesh> RealtimeMesh;
+```
+
+The component binds three delegates when it registers:
+
+- `OnBoundsChanged` — triggers `MarkRenderTransformDirty`
+- `OnRenderDataChanged` — triggers proxy recreation or proxy update depending on what changed
+- `OnCollisionBodyUpdated` — pushes the new `UBodySetup` to the physics system
+
+Because the mesh data lives in `URealtimeMesh` and not in the component, multiple components can share the same mesh asset. You can also swap the mesh at runtime by calling `SetRealtimeMesh`.
+
+## URealtimeMesh and FRealtimeMesh
+
+`URealtimeMesh` is a `UObject` that exists on the game thread. It holds a shared pointer to the internal `FRealtimeMesh`, which is not a `UObject` and is safe to share across threads through shared pointer ownership:
+
+```cpp
+// RealtimeMesh.h
+RealtimeMesh::FRealtimeMeshSharedResourcesPtr SharedResources;
+RealtimeMesh::FRealtimeMeshPtr MeshRef;
+```
+
+`URealtimeMeshSimple` is the concrete subclass you use in practice. It adds the `CreateSectionGroup`, `UpdateSectionGroup`, collision configuration, Nanite resources, distance field, and Lumen card representation APIs on top of the base class.
+
+<Note>
+  You never instantiate `FRealtimeMesh` directly. Always go through `URealtimeMesh` or `URealtimeMeshSimple`, which owns and manages the internal shared pointer.
+</Note>
+
+## The update context and command queue
+
+All mutations to mesh data go through `FRealtimeMeshUpdateContext`. Constructing one acquires a write lock on the shared resources. Destroying it (or calling `Commit()`) releases the lock and flushes the queued render-thread commands:
+
+```cpp
+// Conceptual usage — UpdateContext batches all changes
+{
+    FRealtimeMeshUpdateContext UpdateContext(Mesh);
+
+    // All mutations enqueue render-thread commands into ProxyBuilder
+    SectionGroup.CreateOrUpdateStream(UpdateContext, MoveTemp(PositionStream));
+    Section.UpdateConfig(UpdateContext, NewConfig);
+
+    // Destructor commits the batch — one render-thread dispatch
+}
+```
+
+The context holds a `FRealtimeMeshProxyUpdateBuilder`, which is the actual command queue. Commands are only dispatched when the context is committed, so changes that happen together are applied atomically on the render thread.
+
+The `FRealtimeMeshUpdateState` inside the context tracks dirty flags across the hierarchy (bounds, configs, streams, section ranges) so only affected proxy data is updated:
+
+```cpp
+// RealtimeMeshUpdateBuilder.h
+struct FRealtimeMeshUpdateState
+{
+    FRealtimeMeshStructuredDirtyTree BoundsDirtyTree;
+    FRealtimeMeshStructuredDirtyTree ConfigDirtyTree;
+    FRealtimeMeshStructuredStreamDirtyTree StreamDirtyTree;
+    FRealtimeMeshSectionRangeDirtyTree StreamRangeDirtyTree;
+
+    uint32 bNeedsBoundsUpdate : 1;
+    uint32 bNeedsCollisionUpdate : 1;
+    uint32 bNeedsRenderProxyUpdate : 1;
+};
+```
+
+## Async future pattern
+
+Most `URealtimeMeshSimple` mutation methods return `TFuture<ERealtimeMeshProxyUpdateStatus>`. This future resolves when the render thread has finished applying the update:
+
+```cpp
+// Wait for the proxy update to complete before proceeding
+TFuture<ERealtimeMeshProxyUpdateStatus> Future =
+    RMesh->CreateSectionGroup(GroupKey, StreamSet);
+
+Future.Then([](ERealtimeMeshProxyUpdateStatus Status)
+{
+    // Status == ERealtimeMeshProxyUpdateStatus::Updated when successful
+    UE_LOG(LogTemp, Log, TEXT("Proxy updated: %d"), (int32)Status);
+});
+```
+
+You do not need to `Wait()` on the future in typical usage. Fire-and-forget is the expected pattern unless you need to chain operations that depend on the proxy being ready.
+
+<Warning>
+  Calling `Wait()` on the game thread while the render thread is processing can cause deadlocks if the game thread is also blocking the render thread. Use `Then()` with a callback instead.
+</Warning>
+
+## Why this enables efficient updates
+
+Because the update system tracks dirty state at the stream and section level:
+
+- Updating a single vertex position stream sends only that buffer to the GPU — not the entire mesh.
+- Changing a section's material slot sends a config update command, not a vertex buffer re-upload.
+- Adding a new LOD only initializes proxy resources for that LOD.
+
+This is in contrast to `UProceduralMeshComponent`, which rebuilds its entire scene proxy on any geometry change.
+
+<CardGroup cols={2}>
+  <Card title="Mesh hierarchy" icon="sitemap" href="/concepts/mesh-hierarchy">
+    Understand the LOD → SectionGroup → Section hierarchy and key types.
+  </Card>
+  <Card title="Data streams" icon="database" href="/concepts/data-streams">
+    Learn how vertex and index buffers are organised into typed streams.
+  </Card>
+</CardGroup>

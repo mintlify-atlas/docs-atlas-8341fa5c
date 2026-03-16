@@ -1,0 +1,204 @@
+---
+title: "FRealtimeMeshSimpleGeometry"
+description: "Simple collision shapes for realtime meshes."
+---
+
+`FRealtimeMeshSimpleGeometry` is the container for all primitive collision shapes attached to a `URealtimeMeshSimple`. Simple shapes are used for fast overlap tests, sweeps, and as the "simple collision" representation when `bUseComplexAsSimpleCollision = false`.
+
+Set via `URealtimeMeshSimple::SetSimpleGeometry()`, retrieve via `GetSimpleGeometry()`.
+
+---
+
+## FRealtimeMeshCollisionShape (Base)
+
+All shape types inherit from this base struct.
+
+```cpp
+struct FRealtimeMeshCollisionShape
+```
+
+<ResponseField name="Name" type="FName">
+  An optional name used to look up this shape by name in the shape set. Default: `NAME_None`.
+</ResponseField>
+
+<ResponseField name="Center" type="FVector">
+  Shape origin in local mesh space. Default: `FVector::ZeroVector`.
+</ResponseField>
+
+<ResponseField name="Rotation" type="FRotator">
+  Local rotation of the shape. Default: `FRotator::ZeroRotator`.
+</ResponseField>
+
+<ResponseField name="bContributesToMass" type="bool">
+  Whether this shape is included in mass calculations. Default: `true`.
+</ResponseField>
+
+---
+
+## FRealtimeMeshCollisionSphere
+
+```cpp
+struct FRealtimeMeshCollisionSphere : public FRealtimeMeshCollisionShape
+```
+
+<ResponseField name="Radius" type="float">
+  Sphere radius in centimetres. Default: `0.5f`.
+</ResponseField>
+
+**Example:**
+```cpp
+FRealtimeMeshCollisionSphere Sphere;
+Sphere.Name   = "MainSphere";
+Sphere.Center = FVector(0, 0, 50);
+Sphere.Radius = 50.f;
+Geometry.Spheres.Add(Sphere);
+```
+
+---
+
+## FRealtimeMeshCollisionBox
+
+```cpp
+struct FRealtimeMeshCollisionBox : public FRealtimeMeshCollisionShape
+```
+
+<ResponseField name="Extents" type="FVector">
+  Half-extents along each axis (i.e., total size = `Extents * 2`). Default: `FVector(0.5f, 0.5f, 0.5f)`.
+</ResponseField>
+
+**Example:**
+```cpp
+FRealtimeMeshCollisionBox Box;
+Box.Extents = FVector(100.f, 50.f, 10.f);
+Geometry.Boxes.Add(Box);
+```
+
+---
+
+## FRealtimeMeshCollisionCapsule
+
+```cpp
+struct FRealtimeMeshCollisionCapsule : public FRealtimeMeshCollisionShape
+```
+
+<ResponseField name="Radius" type="float">
+  Capsule radius. Default: `0.5f`.
+</ResponseField>
+
+<ResponseField name="Length" type="float">
+  Total length of the cylindrical portion (not half-length). Default: `0.5f`.
+</ResponseField>
+
+---
+
+## FRealtimeMeshCollisionTaperedCapsule
+
+```cpp
+struct FRealtimeMeshCollisionTaperedCapsule : public FRealtimeMeshCollisionShape
+```
+
+<ResponseField name="RadiusA" type="float">
+  Radius at the first end. Default: `0.5f`.
+</ResponseField>
+
+<ResponseField name="RadiusB" type="float">
+  Radius at the second end. Default: `0.5f`.
+</ResponseField>
+
+<ResponseField name="Length" type="float">
+  Length of the cylindrical section. Default: `0.5f`.
+</ResponseField>
+
+---
+
+## FRealtimeMeshCollisionConvex
+
+```cpp
+struct FRealtimeMeshCollisionConvex : public FRealtimeMeshCollisionShape
+```
+
+A convex hull defined by a set of vertices. Cooked data is cached after the first cook.
+
+<ResponseField name="Vertices (via SetVertices)" type="TArray&lt;FVector&gt;">
+  The input vertex cloud. The convex hull is computed from these points during physics cooking.
+</ResponseField>
+
+```cpp
+// Mutations
+void SetVertices(const TArray<FVector>& InVertices);
+void SetVertices(TArray<FVector>&& InVertices);
+void ClearVertices();
+const TArray<FVector>& GetVertices() const;
+void EditVertices(const TFunctionRef<void(TArray<FVector>&)>& ProcessFunc);
+
+// Cook state
+bool NeedsCook() const;
+bool HasCookedMesh() const;
+void ReleaseCooked() const; // invalidates cached cook data
+```
+
+---
+
+## FRealtimeMeshSimpleGeometry (Container)
+
+```cpp
+struct FRealtimeMeshSimpleGeometry
+{
+    FSimpleShapeSet<FRealtimeMeshCollisionSphere>         Spheres;
+    FSimpleShapeSet<FRealtimeMeshCollisionBox>            Boxes;
+    FSimpleShapeSet<FRealtimeMeshCollisionCapsule>        Capsules;
+    FSimpleShapeSet<FRealtimeMeshCollisionTaperedCapsule> TaperedCapsules;
+    FSimpleShapeSet<FRealtimeMeshCollisionConvex>         ConvexHulls;
+
+    bool HasAnyShapes() const;
+};
+```
+
+Each collection is a `FSimpleShapeSet<T>` with the following interface:
+
+```cpp
+int32 Add(const ShapeType& NewShape);              // returns index
+bool  Insert(int32 Index, const ShapeType& Shape);
+ShapeType& GetByIndex(int32 Index);
+bool  GetByName(FName ShapeName, ShapeType& Out) const;
+bool  Update(int32 Index, const ShapeType& Shape);
+bool  Remove(int32 Index);
+bool  Remove(FName ShapeName);
+bool  IsEmpty() const;
+int32 Num() const;
+```
+
+---
+
+## Full Example
+
+```cpp
+FRealtimeMeshSimpleGeometry Geometry;
+
+// Add a bounding sphere for fast rejection tests
+FRealtimeMeshCollisionSphere Sphere;
+Sphere.Name   = "BoundsSphere";
+Sphere.Center = FVector::ZeroVector;
+Sphere.Radius = 150.f;
+Geometry.Spheres.Add(Sphere);
+
+// Add a box for the main body
+FRealtimeMeshCollisionBox Box;
+Box.Extents = FVector(80.f, 40.f, 20.f);
+Geometry.Boxes.Add(Box);
+
+Mesh->SetSimpleGeometry(Geometry);
+```
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Collision Configuration" href="/api/collision-config">
+    Controls whether complex collision is used as simple.
+  </Card>
+  <Card title="Complex Geometry" href="/api/complex-geometry">
+    Per-triangle collision for accurate physics.
+  </Card>
+</CardGroup>

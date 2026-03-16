@@ -1,0 +1,229 @@
+---
+title: "LOD Example"
+description: "Add discrete LOD levels to a URealtimeMeshSimple to reduce triangle counts at distance, using FRealtimeMeshLODConfig and screen-size thresholds."
+---
+
+Level of Detail (LOD) is essential for maintaining frame rate in scenes with many or large procedural meshes. `URealtimeMeshSimple` supports discrete LODs: you supply a separate `FRealtimeMeshStreamSet` for each LOD level, and the engine switches between them based on projected screen size.
+
+## How RMC LODs work
+
+Every `URealtimeMeshSimple` starts with **LOD 0** already created. You add higher LOD indices by calling `AddLOD`. Each LOD has a `FRealtimeMeshLODConfig` that specifies a **screen size threshold** — when the mesh's projected screen coverage drops below that fraction, the engine activates the next LOD.
+
+The screen size is expressed as a fraction of the screen height (0.0–1.0). A value of `0.5` means the LOD activates when the mesh is smaller than 50% of screen height.
+
+## FRealtimeMeshLODConfig
+
+```cpp
+struct FRealtimeMeshLODConfig
+{
+    // Screen size below which this LOD becomes active (0.0 - 1.0)
+    float ScreenSize;
+
+    // Is this LOD currently active?
+    bool bIsVisible;
+};
+```
+
+Construct it with just the screen size:
+
+```cpp
+FRealtimeMeshLODConfig LOD0Config(0.75f);  // active when mesh > 75% of screen height
+FRealtimeMeshLODConfig LOD1Config(0.5f);
+FRealtimeMeshLODConfig LOD2Config(0.25f);
+FRealtimeMeshLODConfig LOD3Config(0.125f);
+```
+
+## Creating a mesh with four LODs
+
+The following example (from `ARealtimeMeshLODExample`) creates four LOD levels. Each LOD renders the same box geometry but rotated differently so it is easy to see the transitions in the editor.
+
+### Step 1: Initialize the mesh and configure LOD 0
+
+LOD 0 always exists. Call `UpdateLODConfig` to set its screen-size threshold:
+
+```cpp
+void ARealtimeMeshLODExample::OnConstruction(const FTransform& Transform)
+{
+    Super::OnConstruction(Transform);
+
+    URealtimeMeshSimple* RealtimeMesh =
+        GetRealtimeMeshComponent()->InitializeRealtimeMesh<URealtimeMeshSimple>();
+
+    RealtimeMesh->SetupMaterialSlot(0, "PrimaryMaterial");
+
+    // Configure LOD 0 — active when mesh is larger than 75% of screen height
+    RealtimeMesh->UpdateLODConfig(0, FRealtimeMeshLODConfig(0.75));
+```
+
+### Step 2: Add LODs 1–3 with AddLOD
+
+`AddLOD` appends a new LOD level. Use a geometric progression for the screen sizes so each LOD covers roughly the same visual distance band:
+
+```cpp
+    // Rotate each LOD so transitions are obvious
+    FColor Colors[4] = {
+        FColor::White, FColor::Blue, FColor::Red, FColor::Green
+    };
+    FTransform3f Transforms[4] = {
+        FTransform3f::Identity,
+        FTransform3f(FRotator3f(0.0f,  45.0f,  0.0f)),
+        FTransform3f(FRotator3f(0.0f,  90.0f, 45.0f)),
+        FTransform3f(FRotator3f(45.0f, 135.0f, 0.0f))
+    };
+```
+
+### Step 3: Build and upload each LOD's geometry
+
+Loop over all four LODs. For indices > 0, call `AddLOD` first.
+
+```cpp
+    for (int32 LODIndex = 0; LODIndex < 4; LODIndex++)
+    {
+        if (LODIndex > 0)
+        {
+            // ScreenSize halves with each LOD level: 0.5, 0.25, 0.125
+            RealtimeMesh->AddLOD(FRealtimeMeshLODConfig(FMath::Pow(0.5f, LODIndex)));
+        }
+
+        // Build the StreamSet for this LOD
+        FRealtimeMeshStreamSet StreamSet;
+        TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 2> Builder(StreamSet);
+
+        Builder.EnableTangents();
+        Builder.EnableTexCoords();
+        Builder.EnableColors();
+        Builder.EnablePolyGroups();
+
+        // Use the shape tools helper to append a box to the stream set
+        URealtimeMeshBasicShapeTools::AppendBoxMesh(
+            StreamSet,
+            FVector3f(100.0f, 100.0f, 100.0f),  // box extents
+            Transforms[LODIndex],                // rotation differs per LOD
+            0,                                   // poly group index
+            Colors[LODIndex]                     // tint colour differs per LOD
+        );
+
+        // Create the section group in this LOD
+        const FRealtimeMeshSectionGroupKey GroupKey =
+            FRealtimeMeshSectionGroupKey::Create(LODIndex, FName("TestBox"));
+        const FRealtimeMeshSectionKey PolyGroup0SectionKey =
+            FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 0);
+
+        RealtimeMesh->CreateSectionGroup(GroupKey, StreamSet);
+        RealtimeMesh->UpdateSectionConfig(PolyGroup0SectionKey, FRealtimeMeshSectionConfig(0));
+    }
+}
+```
+
+## Complete source
+
+```cpp
+// Copyright (c) 2015-2025 TriAxis Games, L.L.C. All Rights Reserved.
+
+#include "RealtimeMeshLODExample.h"
+#include "RealtimeMeshSimple.h"
+#include "Mesh/RealtimeMeshBasicShapeTools.h"
+
+using namespace RealtimeMesh;
+
+ARealtimeMeshLODExample::ARealtimeMeshLODExample()
+{
+    PrimaryActorTick.bCanEverTick = false;
+}
+
+void ARealtimeMeshLODExample::OnConstruction(const FTransform& Transform)
+{
+    Super::OnConstruction(Transform);
+
+    URealtimeMeshSimple* RealtimeMesh =
+        GetRealtimeMeshComponent()->InitializeRealtimeMesh<URealtimeMeshSimple>();
+
+    RealtimeMesh->SetupMaterialSlot(0, "PrimaryMaterial");
+    RealtimeMesh->UpdateLODConfig(0, FRealtimeMeshLODConfig(0.75));
+
+    FColor Colors[4] = { FColor::White, FColor::Blue, FColor::Red, FColor::Green };
+    FTransform3f Transforms[4] = {
+        FTransform3f::Identity,
+        FTransform3f(FRotator3f(0.0f,  45.0f,  0.0f)),
+        FTransform3f(FRotator3f(0.0f,  90.0f, 45.0f)),
+        FTransform3f(FRotator3f(45.0f, 135.0f, 0.0f))
+    };
+
+    for (int32 LODIndex = 0; LODIndex < 4; LODIndex++)
+    {
+        if (LODIndex > 0)
+        {
+            RealtimeMesh->AddLOD(FRealtimeMeshLODConfig(FMath::Pow(0.5f, LODIndex)));
+        }
+
+        FRealtimeMeshStreamSet StreamSet;
+        TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 2> Builder(StreamSet);
+
+        Builder.EnableTangents();
+        Builder.EnableTexCoords();
+        Builder.EnableColors();
+        Builder.EnablePolyGroups();
+
+        URealtimeMeshBasicShapeTools::AppendBoxMesh(
+            StreamSet, FVector3f(100.0f, 100.0f, 100.0f),
+            Transforms[LODIndex], 0, Colors[LODIndex]
+        );
+
+        const FRealtimeMeshSectionGroupKey GroupKey =
+            FRealtimeMeshSectionGroupKey::Create(LODIndex, FName("TestBox"));
+        const FRealtimeMeshSectionKey PolyGroup0SectionKey =
+            FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 0);
+
+        RealtimeMesh->CreateSectionGroup(GroupKey, StreamSet);
+        RealtimeMesh->UpdateSectionConfig(PolyGroup0SectionKey, FRealtimeMeshSectionConfig(0));
+    }
+}
+```
+
+## LOD screen-size reference
+
+The screen-size thresholds from the example produce this transition table:
+
+| LOD | ScreenSize | Active when mesh covers ... |
+|-----|------------|------------------------------|
+| 0 | 0.75 | > 75% of screen height |
+| 1 | 0.50 | 50% – 75% of screen height |
+| 2 | 0.25 | 25% – 50% of screen height |
+| 3 | 0.125 | < 25% of screen height |
+
+Adjust these values to taste. A large outdoor landscape mesh may use `{0.5, 0.15, 0.05, 0.01}` while a small prop may use `{0.2, 0.05}`.
+
+## Testing LOD transitions in the editor
+
+<Steps>
+  <Step title="Enable LOD preview in the viewport">
+    In the viewport toolbar, click **View Mode > LOD Coloration** to visualise which LOD is active. LOD 0 renders in green, LOD 1 in yellow, and so on.
+  </Step>
+  <Step title="Move the camera">
+    Fly the camera toward and away from the actor. The colours change as the screen-size thresholds are crossed.
+  </Step>
+  <Step title="Force a specific LOD">
+    Select the actor, open the **Details** panel, search for **Forced LOD Level** on the `RealtimeMeshComponent`, and set it to a fixed index to lock the view.
+  </Step>
+  <Step title="Check in Stat Unit">
+    Run `stat unit` in the console. As you move away from the actor the triangle count (visible in `stat RHI`) should drop noticeably at each LOD boundary.
+  </Step>
+</Steps>
+
+## Key design guidelines
+
+- **Never remove geometry from LOD 0 without reducing it in later LODs.** If LOD 3 has more detail than LOD 2, the transition will look wrong.
+- **Keep collision on LOD 0 only.** Complex collision from later LODs is redundant and wastes cooking time.
+- **Use `URealtimeMeshBasicShapeTools::AppendBoxMesh` as a template.** Replace it with your own procedural generation logic per LOD level.
+- **Nanite replaces discrete LODs.** If you enable Nanite on a mesh, the traditional LOD pipeline is bypassed. See [Nanite Support](/guides/nanite-support).
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Nanite Support" icon="microchip" href="/guides/nanite-support">
+    Replace discrete LODs with Nanite's continuous streaming geometry.
+  </Card>
+  <Card title="Collision Setup" icon="shield" href="/guides/collision-setup">
+    Add per-section collision to LOD 0.
+  </Card>
+</CardGroup>

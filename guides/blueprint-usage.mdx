@@ -1,0 +1,186 @@
+---
+title: "Using Blueprints"
+description: "Generate procedural meshes entirely from Blueprint using ARealtimeMeshActor and the URealtimeMeshLocalBuilder node API."
+---
+
+You do not need C++ to generate meshes with RMC. The `ARealtimeMeshActor` base class exposes a full Blueprint API including the `OnGenerateMesh` event, `MakeMeshBuilder`, `AddVertex`, `AddTriangle`, and `UpdateSectionGroup`.
+
+## How Blueprint mesh generation works
+
+`ARealtimeMeshActor` provides:
+
+- **`OnGenerateMesh`** — a `BlueprintNativeEvent` called automatically when the actor is placed, when properties change in the editor, and at `BeginPlay`. Override it in your Blueprint subclass.
+- **`MakeMeshBuilder`** — creates a `URealtimeMeshLocalBuilder` (a Blueprint-friendly wrapper around `TRealtimeMeshBuilderLocal`) with configurable precision options.
+- **`GetRealtimeMeshComponent`** — returns the owned `URealtimeMeshComponent` so you can call `InitializeRealtimeMesh`.
+
+## Creating a Blueprint actor
+
+<Steps>
+  <Step title="Create the Blueprint class">
+    In the Content Browser, click **Add > Blueprint Class**. Search for `RealtimeMeshActor` in the parent class picker and select it. Name the Blueprint (for example `BP_MyProceduralMesh`).
+  </Step>
+  <Step title="Open the Event Graph">
+    Double-click to open the Blueprint editor. In the **Event Graph**, right-click and search for `OnGenerateMesh`. Select **Event On Generate Mesh** to add the override node.
+  </Step>
+  <Step title="Initialize the mesh type">
+    Drag from the **Realtime Mesh Component** reference (call **Get Realtime Mesh Component**) and call **Initialize Realtime Mesh Simple**. Store the returned `URealtimeMeshSimple` reference in a local variable — you will need it later.
+  </Step>
+</Steps>
+
+## The MakeMeshBuilder node
+
+Call `MakeMeshBuilder` on the actor (`self`) to create a local builder. It returns a `URealtimeMeshLocalBuilder` whose stream configuration you control via parameters:
+
+| Parameter | Type | Default | Effect |
+|-----------|------|---------|--------|
+| `WantedTangents` | `ERealtimeMeshSimpleStreamConfig` | `Normal` | Precision of normals/tangents |
+| `WantedTexCoords` | `ERealtimeMeshSimpleStreamConfig` | `Normal` | Precision of UV channels |
+| `bWants32BitIndices` | `bool` | `false` | 32-bit vs 16-bit triangle indices |
+| `WantedPolyGroupType` | `ERealtimeMeshSimpleStreamConfig` | `None` | Enables poly-group stream |
+| `bWantsColors` | `bool` | `true` | Per-vertex color stream |
+| `WantedTexCoordChannels` | `int32` | `1` | Number of UV channels (1–4) |
+| `bKeepExistingData` | `bool` | `true` | Keep previous buffer contents on reinitialize |
+
+### `ERealtimeMeshSimpleStreamConfig` values
+
+| Value | Meaning |
+|-------|---------|
+| `None` | Stream is disabled / not created |
+| `Normal` | Compact format — tangents use `FPackedNormal`, UVs use `FVector2DHalf` |
+| `HighPrecision` | Full-precision format — tangents use `FVector4f`, UVs use `FVector2f` |
+
+<Tip>
+Use `Normal` precision for most gameplay meshes. Only choose `HighPrecision` when you need sub-texel UV accuracy or very fine normal detail (for example, cinematics or close-up hero assets).
+</Tip>
+
+## Adding vertices and triangles
+
+The `URealtimeMeshLocalBuilder` exposes two primary node families:
+
+### AddVertex
+
+Takes a `FRealtimeMeshBasicVertex` struct and returns the integer vertex index.
+
+`FRealtimeMeshBasicVertex` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Position` | `FVector` | World-space vertex position |
+| `Normal` | `FVector` | Vertex normal (default Z-up) |
+| `Tangent` | `FVector` | Vertex tangent (default X-forward) |
+| `Binormal` | `FVector` | Vertex binormal |
+| `Color` | `FLinearColor` | Per-vertex color |
+| `UV0`–`UV3` | `FVector2D` | Texture coordinates for channels 0–3 |
+
+### AddTriangle
+
+Takes three vertex indices and an optional `PolyGroupIndex`. Triangles are wound counter-clockwise.
+
+```
+AddTriangle(Builder, V0, V1, V2, PolyGroupIndex=0)
+```
+
+### EditVertex
+
+Edits an existing vertex in place. Each field has a matching `bWrite*` boolean — only channels with `true` are written, so you can selectively update position without touching UV data.
+
+## Uploading the mesh data
+
+After adding all vertices and triangles, call **Create Section Group** on the `URealtimeMeshSimple` reference:
+
+```
+CreateSectionGroup(SectionGroupKey, Builder /* as URealtimeMeshStreamSet */, OnComplete)
+```
+
+Then call **Update Section Config** to bind a poly-group section to a material slot:
+
+```
+UpdateSectionConfig(SectionKey, FRealtimeMeshSectionConfig(MaterialSlot), bShouldCreateCollision, OnComplete)
+```
+
+<Note>
+`URealtimeMeshLocalBuilder` inherits from `URealtimeMeshStreamSet`, so you can pass the builder directly wherever a `URealtimeMeshStreamSet` is required.
+</Note>
+
+## Complete Blueprint pseudocode
+
+The following pseudocode shows the full flow. Because Blueprints are visual, the exact node layout will differ, but the call order is identical:
+
+```
+// Event OnGenerateMesh
+RealtimeMesh = GetRealtimeMeshComponent → InitializeRealtimeMeshSimple
+Builder      = MakeMeshBuilder(WantedTangents=Normal, WantedTexCoords=Normal,
+                               bWants32BitIndices=false, WantedPolyGroupType=Normal,
+                               bWantsColors=true, WantedTexCoordChannels=1)
+
+RealtimeMesh → SetupMaterialSlot(0, "PrimaryMaterial")
+RealtimeMesh → SetupMaterialSlot(1, "SecondaryMaterial")
+
+V0 = Builder → AddVertex({ Position=(-50,0,0), Normal=(0,-1,0), UV0=(0,0), Color=Red })
+V1 = Builder → AddVertex({ Position=(0,0,100),  Normal=(0,-1,0), UV0=(0.5,1), Color=Green })
+V2 = Builder → AddVertex({ Position=(50,0,0),  Normal=(0,-1,0), UV0=(1,0), Color=Blue })
+
+Builder → AddTriangle(V0, V1, V2, PolyGroupIndex=0)
+Builder → AddTriangle(V2, V1, V0, PolyGroupIndex=1)   // back face
+
+GroupKey       = FRealtimeMeshSectionGroupKey::Create(LOD=0, "TestTriangle")
+Section0Key    = FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 0)
+Section1Key    = FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 1)
+
+RealtimeMesh → CreateSectionGroup(GroupKey, Builder)
+RealtimeMesh → UpdateSectionConfig(Section0Key, Config(MaterialSlot=0))
+RealtimeMesh → UpdateSectionConfig(Section1Key, Config(MaterialSlot=1))
+```
+
+## Using URealtimeMeshStreamSet for lower-level control
+
+If you need direct access to individual streams (for example, to share position data between multiple builders), you can call `MakeStreamSet` on the actor and operate on each stream independently:
+
+```
+StreamSet = MakeStreamSet()
+StreamSet → AddStream(Stream)        // add a pre-configured URealtimeMeshStream
+StreamSet → RemoveStream(StreamKey)
+StreamSet → Reset()
+```
+
+You can also call `MakeLocalMeshBuilder` on the `URealtimeMeshStreamSet` directly to wrap it in a builder later.
+
+## Controlling rebuild behaviour
+
+`ARealtimeMeshActor` has three Blueprint-editable properties that affect when generation runs:
+
+| Property | Default | Effect |
+|----------|---------|--------|
+| `bDeferGeneration` | `false` | When `true`, moves generation out of `OnConstruction` into `OnGenerateMesh` — improves editor performance when dragging actors |
+| `bFrozen` | `false` | Disables automatic rebuilding; the mesh can still be updated by explicit calls |
+| `bResetOnRebuild` | `true` | Clears the component before each `OnGenerateMesh` invocation |
+
+<Warning>
+Setting `bDeferGeneration = false` means `OnConstruction` runs every frame while you are dragging the actor in the editor. For expensive mesh generation, set it to `true`.
+</Warning>
+
+## Object pooling for tick-rate updates
+
+If you regenerate the mesh every tick, use `URealtimeMeshStreamPool` to avoid allocating new `URealtimeMeshLocalBuilder` objects each frame:
+
+```
+Pool = CreateStreamPool()
+
+// Each frame:
+Builder = Pool → RequestMeshBuilder()
+// ... fill builder ...
+Pool → ReturnMeshBuilder(Builder)
+```
+
+This keeps memory pressure low and avoids GC spikes.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Creating a Basic Mesh" icon="cube" href="/guides/basic-mesh">
+    See the equivalent C++ workflow for the same triangle example.
+  </Card>
+  <Card title="Collision Setup" icon="shield" href="/guides/collision-setup">
+    Add simple or complex collision to your Blueprint mesh.
+  </Card>
+</CardGroup>

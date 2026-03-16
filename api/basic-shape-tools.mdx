@@ -1,0 +1,141 @@
+---
+title: "Basic Shape Tools"
+description: "Utility functions for appending primitive shapes to mesh stream sets."
+---
+
+`URealtimeMeshBasicShapeTools` is a Blueprint function library providing static C++ utilities for appending primitive mesh shapes into a `FRealtimeMeshStreamSet`. These functions are the quickest way to add box primitives or combine multiple stream sets.
+
+```cpp
+UCLASS(meta=(ScriptName="RealtimeMeshBasicShapeTools"))
+class URealtimeMeshBasicShapeTools : public UBlueprintFunctionLibrary
+```
+
+---
+
+## AppendBoxMesh
+
+```cpp
+static void AppendBoxMesh(
+    RealtimeMesh::FRealtimeMeshStreamSet& StreamSet,
+    FVector3f BoxRadius,
+    FTransform3f BoxTransform = FTransform3f::Identity,
+    int32 NewMaterialGroup   = 0,
+    FColor Color             = FColor::White
+);
+```
+
+Appends a box (6 quads, 24 vertices, 12 triangles) to `StreamSet`. Each face has correct normals, tangents, and UVs. The box is centered at the transform's origin.
+
+<ParamField path="StreamSet" type="FRealtimeMeshStreamSet&" required>
+  The target stream set to append into. The function creates or grows the Position, Tangents, TexCoords, Triangles, and PolyGroups streams as needed.
+</ParamField>
+
+<ParamField path="BoxRadius" type="FVector3f" required>
+  Half-extents of the box along each axis. A value of `(50, 50, 50)` creates a 100×100×100 unit cube.
+</ParamField>
+
+<ParamField path="BoxTransform" type="FTransform3f">
+  Local-space transform applied to all vertices before appending. Defaults to `FTransform3f::Identity` (no transform).
+</ParamField>
+
+<ParamField path="NewMaterialGroup" type="int32">
+  The polygon group index (material slot) assigned to all triangles of this box. Default: `0`.
+</ParamField>
+
+<ParamField path="Color" type="FColor">
+  Per-vertex color applied to all 24 vertices of the box. Default: `FColor::White`.
+</ParamField>
+
+---
+
+## AppendMesh
+
+```cpp
+static void AppendMesh(
+    RealtimeMesh::FRealtimeMeshStreamSet& TargetMeshData,
+    const RealtimeMesh::FRealtimeMeshStreamSet& MeshDataToAdd,
+    const FTransform3f& Transform       = FTransform3f::Identity,
+    bool bSkipMissingStreams            = false
+);
+```
+
+Appends all streams from `MeshDataToAdd` into `TargetMeshData`, optionally applying a transform to the position and tangent streams. Use this to combine multiple independently-built stream sets into one before uploading.
+
+<ParamField path="TargetMeshData" type="FRealtimeMeshStreamSet&" required>
+  The destination stream set that receives the appended geometry.
+</ParamField>
+
+<ParamField path="MeshDataToAdd" type="const FRealtimeMeshStreamSet&" required>
+  The source stream set to read from. This stream set is not modified.
+</ParamField>
+
+<ParamField path="Transform" type="const FTransform3f&">
+  Transform applied to Position (`FVector3f`) and Tangents (`FPackedNormal` / `FPackedRGBA16N`) before appending. Defaults to identity.
+</ParamField>
+
+<ParamField path="bSkipMissingStreams" type="bool">
+  When `true`, streams that exist in the source but not in the target are skipped instead of creating them. Use this when you intentionally want a sparse merge. Default: `false`.
+</ParamField>
+
+---
+
+## Use Cases
+
+- **Procedural buildings**: call `AppendBoxMesh` once per architectural element with different transforms, then upload the combined stream set to a single section group.
+- **Multi-mesh actors**: build multiple meshes in separate stream sets, then use `AppendMesh` to merge them before uploading.
+- **Instancing without GPU instancing**: batch-append many transformed copies into one stream set for efficient single-draw rendering.
+
+---
+
+## Full Example
+
+```cpp
+#include "Mesh/RealtimeMeshBasicShapeTools.h"
+#include "Core/RealtimeMeshBuilder.h"
+
+void UMyActor::BuildMultiBox(URealtimeMeshSimple* Mesh)
+{
+    using namespace RealtimeMesh;
+
+    FRealtimeMeshStreamSet StreamSet;
+
+    // Bottom platform
+    URealtimeMeshBasicShapeTools::AppendBoxMesh(
+        StreamSet,
+        FVector3f(200.f, 200.f, 10.f),
+        FTransform3f(FQuat4f::Identity, FVector3f(0.f, 0.f, 0.f)),
+        /*MaterialGroup=*/ 0
+    );
+
+    // Column
+    URealtimeMeshBasicShapeTools::AppendBoxMesh(
+        StreamSet,
+        FVector3f(20.f, 20.f, 100.f),
+        FTransform3f(FQuat4f::Identity, FVector3f(0.f, 0.f, 110.f)),
+        /*MaterialGroup=*/ 1
+    );
+
+    auto SectionGroupKey = FRealtimeMeshSectionGroupKey::Create(
+        FRealtimeMeshLODKey(0), FName("Building")
+    );
+
+    Mesh->CreateSectionGroup(SectionGroupKey, MoveTemp(StreamSet));
+}
+```
+
+<Tip>
+  `AppendBoxMesh` writes to the PolyGroups stream automatically when `NewMaterialGroup` is set to a non-zero value. Make sure `bShouldAutoCreateSectionsForPolyGroups = true` on the section group (the default) so that separate sections are created per material.
+</Tip>
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Stream Builder" href="/api/stream-builder">
+    For building custom geometry with full control over every vertex.
+  </Card>
+  <Card title="URealtimeMeshSimple" href="/api/realtime-mesh-simple">
+    Where the resulting stream set is passed to create section groups.
+  </Card>
+</CardGroup>

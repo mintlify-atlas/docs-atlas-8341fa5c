@@ -1,0 +1,203 @@
+---
+title: "URealtimeMeshComponent"
+description: "The primary scene component for rendering runtime-generated mesh geometry."
+---
+
+`URealtimeMeshComponent` is the scene component responsible for rendering a `URealtimeMesh` object at runtime. It derives from `UMeshComponent` and wires mesh bounds changes, render data updates, and collision body updates directly to the render thread.
+
+```
+Inheritance: UMeshComponent → URealtimeMeshComponent
+```
+
+**UCLASS metadata**
+- `ClassGroup=(Rendering, Common)`
+- `BlueprintSpawnableComponent`
+
+---
+
+## Properties
+
+<ResponseField name="RealtimeMesh" type="TObjectPtr&lt;URealtimeMesh&gt;">
+  The mesh object this component renders. Marked `Replicated` — the server assigns it and clients receive it automatically via `OnRep_RealtimeMesh`. Access via `GetRealtimeMesh()` rather than reading the pointer directly.
+</ResponseField>
+
+<ResponseField name="KeepMomentumOnCollisionUpdate" type="bool">
+  When `true`, the component preserves angular and linear momentum when the physics body is rebuilt after a collision update. Default: `false`.
+</ResponseField>
+
+---
+
+## Methods
+
+### SetRealtimeMesh
+
+```cpp
+void SetRealtimeMesh(URealtimeMesh* NewMesh);
+```
+
+Assigns an existing mesh object to this component. Unbinds events from the previous mesh and binds to `NewMesh`. Call this when you want multiple components to share the same `URealtimeMesh` instance.
+
+<ParamField path="NewMesh" type="URealtimeMesh*" required>
+  The mesh object to assign. May be `nullptr` to clear the mesh.
+</ParamField>
+
+---
+
+### InitializeRealtimeMesh
+
+```cpp
+// Blueprint version
+URealtimeMesh* InitializeRealtimeMesh(
+    TSubclassOf<URealtimeMesh> MeshClass
+);
+
+// C++ typed template
+template<typename MeshType>
+MeshType* InitializeRealtimeMesh(
+    TSubclassOf<URealtimeMesh> MeshClass = MeshType::StaticClass()
+);
+```
+
+Creates a new mesh object of the specified class, assigns it to this component, and returns the pointer. This is the preferred initialization path when creating a fresh mesh.
+
+<ParamField path="MeshClass" type="TSubclassOf&lt;URealtimeMesh&gt;" required>
+  The concrete mesh class to instantiate. Must not be abstract. Typically `URealtimeMeshSimple::StaticClass()` or the template parameter.
+</ParamField>
+
+<ResponseField name="return" type="URealtimeMesh* / MeshType*">
+  The newly created and assigned mesh object.
+</ResponseField>
+
+---
+
+### GetRealtimeMesh
+
+```cpp
+URealtimeMesh* GetRealtimeMesh() const;
+
+template<typename RealtimeMeshType>
+RealtimeMeshType* GetRealtimeMeshAs() const;
+```
+
+Returns the currently assigned mesh object. Returns `nullptr` if no mesh has been assigned or if the mesh is invalid.
+
+The typed template variant casts with `CastChecked` — use it only when you know the exact mesh type.
+
+<ResponseField name="return" type="URealtimeMesh* / RealtimeMeshType*">
+  The current mesh, or `nullptr`.
+</ResponseField>
+
+---
+
+### CalcBounds
+
+```cpp
+virtual FBoxSphereBounds CalcBounds(const FTransform& LocalToWorld) const override;
+```
+
+Computes the world-space bounds of the mesh using the mesh's local bounds combined with `LocalToWorld`. Called by the engine every time the component's transform changes.
+
+<ParamField path="LocalToWorld" type="const FTransform&" required>
+  The component's current local-to-world transform.
+</ParamField>
+
+<ResponseField name="return" type="FBoxSphereBounds">
+  The computed world-space bounding box and sphere.
+</ResponseField>
+
+---
+
+### CreateSceneProxy
+
+```cpp
+virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
+```
+
+Creates the render thread proxy used by the engine's renderer. Called automatically when the component is registered or when the mesh data changes and requires a proxy recreation.
+
+---
+
+### GetBodySetup
+
+```cpp
+virtual class UBodySetup* GetBodySetup() override;
+```
+
+Returns the physics body setup for this component, which is managed by the assigned `URealtimeMesh`. Used by the collision system.
+
+---
+
+### UseNaniteOverrideMaterials
+
+```cpp
+virtual bool UseNaniteOverrideMaterials() const override;
+```
+
+Returns whether Nanite override materials should be used for rendering. Delegates to the mesh proxy.
+
+---
+
+### Material Accessors
+
+```cpp
+virtual int32 GetMaterialIndex(FName MaterialSlotName) const override;
+virtual FName GetMaterialSlotName(uint32 Index) const;
+virtual TArray<FName> GetMaterialSlotNames() const override;
+virtual bool IsMaterialSlotNameValid(FName MaterialSlotName) const override;
+virtual int32 GetNumMaterials() const override;
+virtual UMaterialInterface* GetMaterial(int32 ElementIndex) const override;
+```
+
+Standard `UMeshComponent` material interface. These forward to the material slots stored on the `URealtimeMesh` object, not on the component itself. Set material slots via `URealtimeMesh::SetupMaterialSlot()`.
+
+---
+
+### GetLifetimeReplicatedProps
+
+```cpp
+virtual void GetLifetimeReplicatedProps(
+    TArray<FLifetimeProperty>& OutLifetimeProps
+) const override;
+```
+
+Registers the `RealtimeMesh` property for network replication. The mesh replaces on clients via `OnRep_RealtimeMesh`.
+
+---
+
+## Basic Usage
+
+```cpp
+// In your Actor's constructor
+RealtimeMeshComponent = CreateDefaultSubobject<URealtimeMeshComponent>(TEXT("RealtimeMeshComponent"));
+RootComponent = RealtimeMeshComponent;
+
+// At runtime — initialize and retrieve the typed mesh
+URealtimeMeshSimple* Mesh = RealtimeMeshComponent->InitializeRealtimeMesh<URealtimeMeshSimple>();
+
+// Build geometry using the stream builder
+RealtimeMesh::TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 1> Builder;
+Builder.AddVertex(FVector3f(0, 0, 0)).SetNormalAndTangent(FVector3f::UpVector, FVector3f::ForwardVector);
+Builder.AddVertex(FVector3f(100, 0, 0)).SetNormalAndTangent(FVector3f::UpVector, FVector3f::ForwardVector);
+Builder.AddVertex(FVector3f(0, 100, 0)).SetNormalAndTangent(FVector3f::UpVector, FVector3f::ForwardVector);
+Builder.AddTriangle(0, 1, 2);
+
+auto SectionGroupKey = FRealtimeMeshSectionGroupKey::Create(0, FName("MainGroup"));
+Mesh->CreateSectionGroup(SectionGroupKey, Builder.TakeStreamSet());
+```
+
+<Warning>
+  Always call `InitializeRealtimeMesh` before calling any mesh-building methods. Reading `GetRealtimeMesh()` before initialization returns `nullptr`.
+</Warning>
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="URealtimeMeshSimple" href="/api/realtime-mesh-simple">
+    The primary mesh type for building procedural geometry.
+  </Card>
+  <Card title="ARealtimeMeshActor" href="/api/realtime-mesh-actor">
+    A convenience actor wrapping this component with Blueprint mesh generation events.
+  </Card>
+</CardGroup>

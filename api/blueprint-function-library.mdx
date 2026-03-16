@@ -1,0 +1,331 @@
+---
+title: "Blueprint Function Library"
+description: "Static Blueprint utility functions for working with realtime mesh keys and streams."
+---
+
+`URealtimeMeshBlueprintFunctionLibrary` provides pure Blueprint functions for creating key types and stream ranges. All functions are `BlueprintPure` (no execution pin).
+
+```cpp
+UCLASS(meta=(ScriptName="RealtimeMeshLibrary"))
+class URealtimeMeshBlueprintFunctionLibrary : public UBlueprintFunctionLibrary
+```
+
+---
+
+## LOD Keys
+
+### Conv_IntToRealtimeMeshLODKey
+
+```cpp
+static FRealtimeMeshLODKey Conv_IntToRealtimeMeshLODKey(int32 LODIndex);
+```
+
+Autocast from integer to `FRealtimeMeshLODKey`. Used implicitly by the Blueprint compiler when you connect an integer pin to an LOD key pin.
+
+<ParamField path="LODIndex" type="int32" required>
+  Zero-based LOD index. `0` is the highest-detail LOD.
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshLODKey">
+  The corresponding LOD key.
+</ResponseField>
+
+---
+
+### MakeLODKey
+
+```cpp
+static FRealtimeMeshLODKey MakeLODKey(int32 LODIndex);
+```
+
+Explicitly constructs an `FRealtimeMeshLODKey`. Functionally identical to `Conv_IntToRealtimeMeshLODKey`.
+
+<ParamField path="LODIndex" type="int32" required>
+  Zero-based LOD index.
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshLODKey">
+  The corresponding LOD key.
+</ResponseField>
+
+---
+
+### BreakLODKey
+
+```cpp
+static void BreakLODKey(const FRealtimeMeshLODKey& LODKey, int32& LODIndex);
+```
+
+Decomposes an `FRealtimeMeshLODKey` back into its integer index.
+
+<ParamField path="LODKey" type="const FRealtimeMeshLODKey&" required>
+  The key to decompose.
+</ParamField>
+
+<ParamField path="LODIndex" type="int32&" required>
+  Output: the integer LOD index.
+</ParamField>
+
+---
+
+## Section Group Keys
+
+### MakeSectionGroupKeyUnique
+
+```cpp
+static FRealtimeMeshSectionGroupKey MakeSectionGroupKeyUnique(
+    const FRealtimeMeshLODKey& LODKey
+);
+```
+
+Creates a section group key with a globally unique auto-generated name (GUID-based).
+
+<ParamField path="LODKey" type="const FRealtimeMeshLODKey&" required>
+  The LOD this group belongs to.
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshSectionGroupKey">
+  A unique section group key within the given LOD.
+</ResponseField>
+
+---
+
+### MakeSectionGroupKeyIndexed
+
+```cpp
+static FRealtimeMeshSectionGroupKey MakeSectionGroupKeyIndexed(
+    const FRealtimeMeshLODKey& LODKey,
+    int32 SectionGroupIndex
+);
+```
+
+Creates a deterministic section group key from an integer index. The internal name is `"Group_<SectionGroupIndex>"`.
+
+<ParamField path="LODKey" type="const FRealtimeMeshLODKey&" required>
+  The LOD this group belongs to.
+</ParamField>
+
+<ParamField path="SectionGroupIndex" type="int32" required>
+  Numeric identifier for the group.
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshSectionGroupKey">
+  The deterministic section group key.
+</ResponseField>
+
+---
+
+### MakeSectionGroupKeyNamed
+
+```cpp
+static FRealtimeMeshSectionGroupKey MakeSectionGroupKeyNamed(
+    const FRealtimeMeshLODKey& LODKey,
+    FName GroupName
+);
+```
+
+Creates a section group key with a user-specified name.
+
+<ParamField path="LODKey" type="const FRealtimeMeshLODKey&" required>
+  The LOD this group belongs to.
+</ParamField>
+
+<ParamField path="GroupName" type="FName" required>
+  Name of the group. Must be unique within the LOD.
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshSectionGroupKey">
+  The named section group key.
+</ResponseField>
+
+---
+
+## Section Keys
+
+### MakeSectionKeyUnique
+
+```cpp
+static FRealtimeMeshSectionKey MakeSectionKeyUnique(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey
+);
+```
+
+Creates a section key with a unique GUID-based name within the given group.
+
+<ParamField path="SectionGroupKey" type="const FRealtimeMeshSectionGroupKey&" required>
+  The group this section belongs to.
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshSectionKey">
+  A unique section key.
+</ResponseField>
+
+---
+
+### MakeSectionKeyIndexed
+
+```cpp
+static FRealtimeMeshSectionKey MakeSectionKeyIndexed(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    int32 SectionIndex
+);
+```
+
+Creates a deterministic section key from an integer. Internal name: `"Section_<SectionIndex>"`.
+
+<ParamField path="SectionGroupKey" type="const FRealtimeMeshSectionGroupKey&" required>
+  The group this section belongs to.
+</ParamField>
+
+<ParamField path="SectionIndex" type="int32" required>
+  Numeric identifier for the section.
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshSectionKey">
+  The deterministic section key.
+</ResponseField>
+
+---
+
+### MakeSectionKeyNamed
+
+```cpp
+static FRealtimeMeshSectionKey MakeSectionKeyNamed(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    FName SectionName
+);
+```
+
+<ParamField path="SectionGroupKey" type="const FRealtimeMeshSectionGroupKey&" required>
+  The group this section belongs to.
+</ParamField>
+
+<ParamField path="SectionName" type="FName" required>
+  Name for the section.
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshSectionKey">
+  The named section key.
+</ResponseField>
+
+---
+
+### MakeSectionKeyForPolygonGroup
+
+```cpp
+static FRealtimeMeshSectionKey MakeSectionKeyForPolygonGroup(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    int32 PolygonGroup
+);
+```
+
+Creates a section key corresponding to a specific polygon group index. Internal name: `"Section_PolyGroup<PolygonGroup>"`. Used when manually creating sections for poly groups.
+
+<ParamField path="SectionGroupKey" type="const FRealtimeMeshSectionGroupKey&" required>
+  The section group this section belongs to.
+</ParamField>
+
+<ParamField path="PolygonGroup" type="int32" required>
+  The polygon group index this section maps to.
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshSectionKey">
+  The polygon-group section key.
+</ResponseField>
+
+---
+
+## Stream Range
+
+### MakeStreamRange
+
+```cpp
+static FRealtimeMeshStreamRange MakeStreamRange(
+    int32 VerticesLowerInclusive = 0,
+    int32 VerticesUpperExclusive = 0,
+    int32 IndicesLowerInclusive  = 0,
+    int32 IndicesUpperExclusive  = 0
+);
+```
+
+Constructs a `FRealtimeMeshStreamRange` defining the vertex and index sub-range a section covers.
+
+<ParamField path="VerticesLowerInclusive" type="int32">
+  First vertex index (inclusive).
+</ParamField>
+
+<ParamField path="VerticesUpperExclusive" type="int32">
+  Last vertex index (exclusive — i.e., one past the last vertex).
+</ParamField>
+
+<ParamField path="IndicesLowerInclusive" type="int32">
+  First triangle index entry (inclusive).
+</ParamField>
+
+<ParamField path="IndicesUpperExclusive" type="int32">
+  Last triangle index entry (exclusive).
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshStreamRange">
+  The stream range struct.
+</ResponseField>
+
+---
+
+## Stream Keys
+
+### MakeStreamKey
+
+```cpp
+static FRealtimeMeshStreamKey MakeStreamKey(
+    ERealtimeMeshStreamType StreamType,
+    FName StreamName
+);
+```
+
+Constructs an `FRealtimeMeshStreamKey` from a stream type and name.
+
+<ParamField path="StreamType" type="ERealtimeMeshStreamType" required>
+  `Vertex` or `Index`.
+</ParamField>
+
+<ParamField path="StreamName" type="FName" required>
+  Name of the stream (e.g., `"Position"`, `"Triangles"`).
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshStreamKey">
+  The stream key.
+</ResponseField>
+
+---
+
+### GetCommonStreamKey
+
+```cpp
+static FRealtimeMeshStreamKey GetCommonStreamKey(
+    ERealtimeMeshCommonStream StreamType
+);
+```
+
+Converts an `ERealtimeMeshCommonStream` enum value to the corresponding `FRealtimeMeshStreamKey`.
+
+<ParamField path="StreamType" type="ERealtimeMeshCommonStream" required>
+  One of: `Position`, `Tangents`, `TexCoords`, `Colors`, `Triangles`, `DepthOnlyTriangles`, `PolyGroups`, `DepthOnlyPolyGroups`.
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshStreamKey">
+  The standard stream key for the requested stream type.
+</ResponseField>
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Data Streams" href="/api/data-streams">
+    FRealtimeMeshStreamKey, FRealtimeMeshStreamRange, and ERealtimeMeshCommonStream reference.
+  </Card>
+  <Card title="URealtimeMeshSimple" href="/api/realtime-mesh-simple">
+    Where these keys are passed to create and update section groups.
+  </Card>
+</CardGroup>

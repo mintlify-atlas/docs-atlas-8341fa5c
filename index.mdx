@@ -1,97 +1,94 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Realtime Mesh Component"
+description: "High-performance runtime mesh rendering for Unreal Engine 5 — the production-ready replacement for ProceduralMeshComponent."
+mode: "custom"
 ---
 
-## Setting up
+<div style={{ backgroundColor: '#2c2c2c', color: '#ffffff', padding: '80px 40px', textAlign: 'center' }}>
+  <h1 style={{ fontSize: '48px', fontWeight: '300', fontFamily: 'Helvetica, Arial, sans-serif', marginBottom: '16px', color: '#ffffff' }}>
+    Realtime Mesh Component
+  </h1>
+  <p style={{ fontSize: '20px', color: '#b0b0b0', maxWidth: '700px', margin: '0 auto 32px', fontFamily: 'Helvetica, Arial, sans-serif' }}>
+    The production-proven Unreal Engine 5 plugin for runtime procedural geometry. Faster, more powerful, and more flexible than ProceduralMeshComponent.
+  </p>
+  <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+    <a href="/installation" style={{ backgroundColor: '#6CC800', color: '#000000', padding: '12px 28px', borderRadius: '4px', textDecoration: 'none', fontWeight: '600', fontFamily: 'Helvetica, Arial, sans-serif', fontSize: '15px' }}>
+      Get Started
+    </a>
+    <a href="/quickstart" style={{ backgroundColor: 'transparent', color: '#b0b0b0', padding: '12px 28px', borderRadius: '4px', textDecoration: 'none', fontWeight: '600', fontFamily: 'Helvetica, Arial, sans-serif', fontSize: '15px', border: '1px solid #555' }}>
+      View Quickstart
+    </a>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+<div style={{ padding: '60px 40px', maxWidth: '1100px', margin: '0 auto' }}>
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+## Why Realtime Mesh Component?
 
-## Make it yours
+The RMC has been trusted in production for 6+ years — used by individuals, universities, and Fortune 500 companies in shipped games and real-time applications. It provides a clean, efficient API for everything from simple model loading at runtime to procedurally-generating entire worlds.
 
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="High Performance" icon="bolt">
+    Optimized rendering pipeline with batched GPU updates. Dramatically more efficient than ProceduralMeshComponent for dynamic geometry.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="LOD Support" icon="layer-group">
+    Full Level of Detail support for procedural meshes. Define multiple LOD levels to reduce GPU load at distance.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Blueprint Ready" icon="diagram-project">
+    Complete Blueprint API for creating and updating mesh geometry without writing a line of C++.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Collision Support" icon="shield">
+    Automatic complex and simple collision generation from mesh data, with async cooking via the Chaos physics engine.
   </Card>
-</Columns>
+  <Card title="Nanite Support" icon="cube">
+    First-class Nanite integration for virtualized geometry, enabling high-polygon procedural meshes with no performance penalty.
+  </Card>
+  <Card title="Lumen Integration" icon="sun">
+    Distance field and card representation support for full Lumen global illumination on runtime-generated geometry.
+  </Card>
+  <Card title="Network Replication" icon="network-wired">
+    Built-in support for replicating mesh components across the network in multiplayer games.
+  </Card>
+  <Card title="Type-Safe Stream API" icon="code">
+    Flexible, type-safe stream builder API for advanced C++ mesh construction with compile-time type checking.
+  </Card>
+</CardGroup>
 
-## Create beautiful pages
+## Quick navigation
 
-Everything you need to create world-class documentation.
+<CardGroup cols={3}>
+  <Card title="Installation" icon="download" href="/installation">
+    Add the RMC plugin to your Unreal Engine 5 project.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create your first runtime mesh in minutes.
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/architecture">
+    Understand the architecture and data model.
+  </Card>
+  <Card title="Blueprint Usage" icon="diagram-project" href="/guides/blueprint-usage">
+    Use the RMC entirely from Blueprints.
+  </Card>
+  <Card title="Collision Setup" icon="shield" href="/guides/collision-setup">
+    Configure physics collision for runtime meshes.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/realtime-mesh-component">
+    Full C++ and Blueprint API documentation.
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Supported engine versions
 
-## Need inspiration?
+| RMC Version | Unreal Engine Versions |
+|-------------|------------------------|
+| v5.x (current) | UE 5.0 and above |
+| v4.1 | UE 4.23+ |
+| v4.0 | UE 4.20+ |
+| v3.0 | UE 4.17+ |
+| v2.0 | UE 4.12+ |
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Note>
+  This documentation covers RMC v5.x for Unreal Engine 5. For older engine versions, see the [GitHub releases](https://github.com/TriAxis-Games/RealtimeMeshComponent/releases).
+</Note>
+
+</div>

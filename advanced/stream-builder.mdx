@@ -1,0 +1,295 @@
+---
+title: "Stream Builder API"
+description: "Build procedural mesh data efficiently using TRealtimeMeshBuilderLocal and per-stream TRealtimeMeshStreamBuilder helpers."
+---
+
+The Stream Builder API provides two layers of abstraction for constructing mesh data at runtime. The low-level `TRealtimeMeshStreamBuilder` wraps a single `FRealtimeMeshStream` and lets you read and write typed data with automatic format conversion. The high-level `TRealtimeMeshBuilderLocal` coordinates all the standard vertex and index streams as a single unit, including optional tangents, texture coordinates, vertex colors, and polygon groups.
+
+## TRealtimeMeshBuilderLocal
+
+`TRealtimeMeshBuilderLocal` is a stack-allocated template struct that holds references to an existing `FRealtimeMeshStreamSet`. It manages the position, tangent, tex coord, color, triangle, and poly-group streams together, keeping their element counts in sync through the stream linkage system.
+
+```cpp
+template <
+    typename IndexType          = uint32,   // uint16 or uint32 — controls index buffer size
+    typename TangentElementType = FPackedNormal, // FPackedNormal, FPackedRGBA16N, or FVector4f
+    typename TexCoordElementType = FVector2DHalf, // FVector2DHalf or FVector2f
+    int32    NumTexCoords       = 1,         // 1 – 8 UV channels
+    typename PolyGroupIndexType = uint16     // uint8 / uint16 / uint32 for poly group indices
+>
+struct TRealtimeMeshBuilderLocal;
+```
+
+| Parameter | Common choices | Notes |
+|---|---|---|
+| `IndexType` | `uint16`, `uint32` | `uint16` saves GPU memory; use `uint32` when vertex count exceeds 65 535 |
+| `TangentElementType` | `FPackedNormal`, `FPackedRGBA16N`, `FVector4f` | `FPackedNormal` is compact (8-bit per component); `FPackedRGBA16N` is higher precision; `FVector4f` is full float precision |
+| `TexCoordElementType` | `FVector2DHalf`, `FVector2f` | `FVector2DHalf` halves UV memory; `FVector2f` avoids precision artifacts |
+| `NumTexCoords` | 1 – 8 | Number of UV channels stored per vertex |
+| `PolyGroupIndexType` | `uint8`, `uint16`, `uint32` | Limits the number of distinct material sections |
+
+### Constructing the builder
+
+Pass a reference to an existing `FRealtimeMeshStreamSet`. The builder immediately creates `Position` and `Triangles` streams inside that set and defers the optional streams until you call `Enable*`.
+
+```cpp
+#include "RealtimeMeshSimple.h"
+using namespace RealtimeMesh;
+
+// Normal-precision tangents, half-precision UVs, 16-bit indices
+FRealtimeMeshStreamSet StreamSet;
+TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 1> Builder(StreamSet);
+```
+
+### Enabling optional streams
+
+Call these before adding any vertices so the stream linkage is established first.
+
+```cpp
+// Enable tangent stream (normal + tangent stored as FPackedNormal pairs)
+Builder.EnableTangents();
+
+// Enable a single UV channel stored as FVector2DHalf
+Builder.EnableTexCoords();
+
+// Enable per-vertex color stream (always FColor / RGBA8)
+Builder.EnableColors();
+
+// Enable polygon group index stream (maps each triangle to a material section)
+Builder.EnablePolyGroups();
+```
+
+Each `Enable*` method has a templated override that lets you override the storage type independently of the builder's template parameter, as long as the new type is compatible:
+
+```cpp
+// Force higher-precision UV storage even if the template says FVector2DHalf
+Builder.EnableTexCoords<FVector2f>();
+```
+
+### Adding vertices
+
+`AddVertex` returns a `TRealtimeMeshVertexBuilderLocal` — a lightweight proxy that holds the new vertex's index and exposes a fluent setter chain:
+
+```cpp
+int32 V0 = Builder.AddVertex(FVector3f(-50.0f, 0.0f, 0.0f))
+    .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f))
+    .SetColor(FColor::Red)
+    .SetTexCoord(FVector2f(0.0f, 0.0f));
+
+int32 V1 = Builder.AddVertex(FVector3f(0.0f, 0.0f, 100.0f))
+    .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f))
+    .SetColor(FColor::Green)
+    .SetTexCoord(FVector2f(0.5f, 1.0f));
+
+int32 V2 = Builder.AddVertex(FVector3f(50.0f, 0.0f, 0.0f))
+    .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f))
+    .SetColor(FColor::Blue)
+    .SetTexCoord(FVector2f(1.0f, 0.0f));
+```
+
+The vertex builder returns `VertexBuilder&` from each setter, so all calls can be chained. The implicit conversion to `int32` (or `SizeType`) lets you capture the index from the chain's last expression.
+
+#### Full vertex setter reference
+
+| Method | Description |
+|---|---|
+| `SetPosition(FVector3f)` | Overwrites the position of an already-added vertex |
+| `SetNormal(FVector3f)` | Sets normal component only (requires tangents enabled) |
+| `SetTangent(FVector3f)` | Sets tangent component only (requires tangents enabled) |
+| `SetNormalAndTangent(FVector3f Normal, FVector3f Tangent)` | Sets both at once; binormal sign defaults to positive |
+| `SetTangents(FVector3f Normal, FVector3f Binormal, FVector3f Tangent)` | Full TBN basis; computes binormal sign from cross product |
+| `SetTexCoord(FVector2f)` | Sets UV channel 0 |
+| `SetTexCoord(int32 Index, FVector2f)` | Sets a specific UV channel (requires `NumTexCoords > 1`) |
+| `SetColor(FColor)` | Sets per-vertex color |
+| `SetColor(FLinearColor, bool bSRGB)` | Converts and sets per-vertex color |
+
+### Adding triangles
+
+```cpp
+// Single triangle, vertex indices, optional poly group
+Builder.AddTriangle(V0, V1, V2);
+Builder.AddTriangle(V2, V1, V0, 1); // second argument is the poly group / material index
+
+// Struct form
+Builder.AddTriangle(TIndex3<uint32>(V0, V1, V2), 0);
+```
+
+<Warning>
+Triangle winding is counter-clockwise for front faces. Swapping any two indices inverts the face normal, which is useful for back-face rendering but breaks collision if this section uses complex collision.
+</Warning>
+
+### Submitting the stream set
+
+Once all vertices and triangles are added, pass the stream set to `URealtimeMeshSimple`:
+
+```cpp
+const FRealtimeMeshSectionGroupKey GroupKey =
+    FRealtimeMeshSectionGroupKey::Create(0, FName("MyMesh"));
+
+// CreateSectionGroup takes ownership by move or accepts a const ref (copies internally)
+RealtimeMesh->CreateSectionGroup(GroupKey, StreamSet);
+```
+
+If you enabled poly groups, `CreateSectionGroup` automatically creates one section per unique poly-group index found in the triangle stream.
+
+---
+
+## TRealtimeMeshStreamBuilder
+
+`TRealtimeMeshStreamBuilder` is the lower-level tool used directly when you want fine-grained control over individual streams or when you build your own stream layout outside the standard vertex factory.
+
+```cpp
+// Strongly-typed: both access type and storage type are FVector3f (no conversion)
+TRealtimeMeshStreamBuilder<FVector3f> PositionBuilder(
+    StreamSet.AddStream(FRealtimeMeshStreams::Position,
+                        GetRealtimeMeshBufferLayout<FVector3f>()));
+
+// Conversion builder: access as FVector2f but stored as FVector2DHalf
+TRealtimeMeshStreamBuilder<FVector2f, FVector2DHalf> UVBuilder(
+    StreamSet.AddStream(FRealtimeMeshStreams::TexCoords,
+                        GetRealtimeMeshBufferLayout<FVector2DHalf>()));
+
+// Cross-type access: read/write as TIndex3<uint32>, stored as TIndex3<uint16>
+TRealtimeMeshStreamBuilder<TIndex3<uint32>, TIndex3<uint16>> TriBuilder(
+    StreamSet.AddStream(FRealtimeMeshStreams::Triangles,
+                        GetRealtimeMeshBufferLayout<TIndex3<uint16>>()));
+```
+
+The second template argument is the *buffer type* — the on-disk format. RMC performs the conversion transparently when reading and writing.
+
+### Key operations
+
+```cpp
+// Add and get back the new row index
+int32 Idx = PositionBuilder.Add(FVector3f(0, 0, 100));
+
+// Append a range at once
+TArray<FVector3f> Positions = { ... };
+PositionBuilder.Append(Positions);
+
+// Edit an existing entry
+PositionBuilder.Set(Idx, FVector3f(0, 0, 200));
+
+// Read an existing entry
+FVector3f P = PositionBuilder.GetValue(Idx);
+
+// Reserve to avoid reallocations
+PositionBuilder.Reserve(1024);
+
+// Bulk-fill with a generator function [](int32 LocalIndex, int32 GlobalIndex) -> FVector3f
+PositionBuilder.AppendGenerator(Count, [](int32 i, int32) {
+    return FVector3f(i * 10.0f, 0.0f, 0.0f);
+});
+```
+
+### TRealtimeMeshStridedStreamBuilder
+
+When you need to access only a sub-range of elements within a multi-element stream row (e.g., reading just UV channel 2 out of a 4-channel UV stream), use the strided variant:
+
+```cpp
+// Access only the element at index 1 within each row of the Tangents stream
+TRealtimeMeshStridedStreamBuilder<FVector4f, FVector4f> NormalBuilder(
+    TangentStream, /* ElementOffset = */ 1);
+```
+
+`TRealtimeMeshStridedStreamBuilder<AccessType, BufferType>` is a typedef for `TRealtimeMeshStreamBuilderBase<AccessType, BufferType, /*bAllowSubstreamAccess=*/true>`.
+
+---
+
+## Complete example: low-level stream builder
+
+This is the approach used in `RealtimeMeshByStreamBuilder.cpp`:
+
+```cpp
+#include "RealtimeMeshSimple.h"
+using namespace RealtimeMesh;
+
+void BuildMesh(URealtimeMeshSimple* RealtimeMesh)
+{
+    FRealtimeMeshStreamSet StreamSet;
+
+    // Create each stream and wrap in a typed builder
+    TRealtimeMeshStreamBuilder<FVector3f> PositionBuilder(
+        StreamSet.AddStream(FRealtimeMeshStreams::Position,
+                            GetRealtimeMeshBufferLayout<FVector3f>()));
+
+    // Store tangents as FPackedNormal pairs, access as high-precision FVector4f pairs
+    TRealtimeMeshStreamBuilder<FRealtimeMeshTangentsHighPrecision,
+                               FRealtimeMeshTangentsNormalPrecision> TangentBuilder(
+        StreamSet.AddStream(FRealtimeMeshStreams::Tangents,
+                            GetRealtimeMeshBufferLayout<FRealtimeMeshTangentsNormalPrecision>()));
+
+    TRealtimeMeshStreamBuilder<FVector2f, FVector2DHalf> UVBuilder(
+        StreamSet.AddStream(FRealtimeMeshStreams::TexCoords,
+                            GetRealtimeMeshBufferLayout<FVector2DHalf>()));
+
+    TRealtimeMeshStreamBuilder<FColor> ColorBuilder(
+        StreamSet.AddStream(FRealtimeMeshStreams::Color,
+                            GetRealtimeMeshBufferLayout<FColor>()));
+
+    TRealtimeMeshStreamBuilder<TIndex3<uint32>, TIndex3<uint16>> TriBuilder(
+        StreamSet.AddStream(FRealtimeMeshStreams::Triangles,
+                            GetRealtimeMeshBufferLayout<TIndex3<uint16>>()));
+
+    TRealtimeMeshStreamBuilder<uint32, uint16> PolyGroupBuilder(
+        StreamSet.AddStream(FRealtimeMeshStreams::PolyGroups,
+                            GetRealtimeMeshBufferLayout<uint16>()));
+
+    // Reserve capacity
+    PositionBuilder.Reserve(3);
+
+    // Add vertices
+    int32 V0 = PositionBuilder.Add(FVector3f(-50.0f, 0.0f,   0.0f));
+    TangentBuilder.Add(FRealtimeMeshTangentsHighPrecision(
+        FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f)));
+    ColorBuilder.Add(FColor::Red);
+    UVBuilder.Add(FVector2f(0.0f, 0.0f));
+
+    int32 V1 = PositionBuilder.Add(FVector3f(0.0f, 0.0f, 100.0f));
+    TangentBuilder.Add(FRealtimeMeshTangentsHighPrecision(
+        FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f)));
+    ColorBuilder.Add(FColor::Green);
+    UVBuilder.Add(FVector2f(0.5f, 1.0f));
+
+    int32 V2 = PositionBuilder.Add(FVector3f(50.0f, 0.0f,   0.0f));
+    TangentBuilder.Add(FRealtimeMeshTangentsHighPrecision(
+        FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f)));
+    ColorBuilder.Add(FColor::Blue);
+    UVBuilder.Add(FVector2f(1.0f, 0.0f));
+
+    // Add triangles with poly groups
+    TriBuilder.Add(TIndex3<uint32>(V0, V1, V2));
+    PolyGroupBuilder.Add(0);
+
+    TriBuilder.Add(TIndex3<uint32>(V2, V1, V0));
+    PolyGroupBuilder.Add(1);
+
+    // Submit
+    const FRealtimeMeshSectionGroupKey GroupKey =
+        FRealtimeMeshSectionGroupKey::Create(0, FName("Triangle"));
+    RealtimeMesh->CreateSectionGroup(GroupKey, StreamSet);
+
+    RealtimeMesh->UpdateSectionConfig(
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 0),
+        FRealtimeMeshSectionConfig(0));
+    RealtimeMesh->UpdateSectionConfig(
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 1),
+        FRealtimeMeshSectionConfig(1));
+}
+```
+
+---
+
+## Choosing between the two approaches
+
+<AccordionGroup>
+  <Accordion title="When to use TRealtimeMeshBuilderLocal">
+    Use `TRealtimeMeshBuilderLocal` when you are building standard mesh data that targets Unreal's `FLocalVertexFactory` (the default). It handles stream linkage automatically, ensures all enabled vertex streams stay the same length, and provides the convenient chained-setter vertex API. This is the approach shown in `RealtimeMeshDirect.cpp`.
+  </Accordion>
+  <Accordion title="When to use TRealtimeMeshStreamBuilder directly">
+    Use `TRealtimeMeshStreamBuilder` directly when you need precise control over individual stream layouts, are implementing a custom vertex factory with a non-standard stream set, or are reading back data from an existing stream for inspection or modification. This is the approach shown in `RealtimeMeshByStreamBuilder.cpp`.
+  </Accordion>
+  <Accordion title="Can I mix both?">
+    Yes. `TRealtimeMeshBuilderLocal` holds a reference to the `FRealtimeMeshStreamSet`, so you can construct a `TRealtimeMeshStreamBuilder` from any stream inside that set and use both APIs on the same data.
+  </Accordion>
+</AccordionGroup>

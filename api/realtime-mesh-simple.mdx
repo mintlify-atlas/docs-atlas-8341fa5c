@@ -1,0 +1,422 @@
+---
+title: "URealtimeMeshSimple"
+description: "The primary mesh type for creating and updating runtime procedural geometry."
+---
+
+`URealtimeMeshSimple` is the main concrete implementation of `URealtimeMesh`. It manages a hierarchy of LODs → SectionGroups → Sections. Each `SectionGroup` holds the raw stream data (vertex buffers, index buffers) and each `Section` maps a stream range to a material slot.
+
+```
+Inheritance: UObject → URealtimeMesh → URealtimeMeshSimple
+UCLASS: Blueprintable
+```
+
+<Note>
+  For most projects, this is the only mesh class you need. Use `URealtimeMeshComponent::InitializeRealtimeMesh<URealtimeMeshSimple>()` to create one.
+</Note>
+
+---
+
+## Factory
+
+### InitializeRealtimeMeshSimple
+
+```cpp
+static URealtimeMeshSimple* InitializeRealtimeMeshSimple(
+    URealtimeMeshComponent* Owner
+);
+```
+
+Static convenience factory. Creates a `URealtimeMeshSimple`, assigns it to `Owner`, and returns the typed pointer. Equivalent to calling `Owner->InitializeRealtimeMesh<URealtimeMeshSimple>()`.
+
+<ParamField path="Owner" type="URealtimeMeshComponent*" required>
+  The component that will own and render this mesh.
+</ParamField>
+
+---
+
+## Section Group Management
+
+SectionGroups are containers for stream data within a given LOD. Auto-section creation is enabled by default: the system creates one `Section` per distinct polygon group found in the index stream.
+
+### CreateSectionGroup (C++)
+
+```cpp
+// Empty group — fill later with UpdateSectionGroup
+TFuture<ERealtimeMeshProxyUpdateStatus> CreateSectionGroup(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    const FRealtimeMeshSectionGroupConfig& InConfig = FRealtimeMeshSectionGroupConfig(),
+    bool bShouldAutoCreateSectionsForPolyGroups = true
+);
+
+// Move-construct from stream set
+TFuture<ERealtimeMeshProxyUpdateStatus> CreateSectionGroup(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    FRealtimeMeshStreamSet&& MeshData,
+    const FRealtimeMeshSectionGroupConfig& InConfig = FRealtimeMeshSectionGroupConfig(),
+    bool bShouldAutoCreateSectionsForPolyGroups = true
+);
+
+// Copy-construct from stream set
+TFuture<ERealtimeMeshProxyUpdateStatus> CreateSectionGroup(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    const FRealtimeMeshStreamSet& MeshData,
+    const FRealtimeMeshSectionGroupConfig& InConfig = FRealtimeMeshSectionGroupConfig(),
+    bool bShouldAutoCreateSectionsForPolyGroups = true
+);
+```
+
+<ParamField path="SectionGroupKey" type="const FRealtimeMeshSectionGroupKey&" required>
+  Uniquely identifies this group within an LOD.
+</ParamField>
+
+<ParamField path="MeshData" type="FRealtimeMeshStreamSet">
+  The vertex and index stream data. When omitted the group starts empty.
+</ParamField>
+
+<ParamField path="InConfig" type="const FRealtimeMeshSectionGroupConfig&">
+  Group-level rendering configuration.
+</ParamField>
+
+<ParamField path="bShouldAutoCreateSectionsForPolyGroups" type="bool">
+  When `true`, sections are automatically created for each polygon group found in the stream data.
+</ParamField>
+
+<ResponseField name="return" type="TFuture&lt;ERealtimeMeshProxyUpdateStatus&gt;">
+  A future that resolves when the render proxy has been updated.
+</ResponseField>
+
+---
+
+### CreateSectionGroup (Blueprint)
+
+```cpp
+UFUNCTION(BlueprintCallable, DisplayName="CreateSectionGroup")
+void CreateSectionGroup(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    URealtimeMeshStreamSet* MeshData,
+    const FRealtimeMeshSimpleCompletionCallback& OnComplete
+);
+```
+
+<ParamField path="SectionGroupKey" type="FRealtimeMeshSectionGroupKey" required>
+  Key for the new section group.
+</ParamField>
+
+<ParamField path="MeshData" type="URealtimeMeshStreamSet*" required>
+  Blueprint stream set containing the mesh data.
+</ParamField>
+
+<ParamField path="OnComplete" type="FRealtimeMeshSimpleCompletionCallback" required>
+  Delegate called when the proxy update completes, receiving `ERealtimeMeshProxyUpdateStatus`.
+</ParamField>
+
+---
+
+### CreateSectionGroupUnique (Blueprint)
+
+```cpp
+UFUNCTION(BlueprintCallable, DisplayName="CreateSectionGroupUnique")
+FRealtimeMeshSectionGroupKey CreateSectionGroupUnique(
+    const FRealtimeMeshLODKey& LODKey,
+    URealtimeMeshStreamSet* MeshData,
+    const FRealtimeMeshSimpleCompletionCallback& OnComplete
+);
+```
+
+Creates a section group with a unique auto-generated name within the given LOD.
+
+<ParamField path="LODKey" type="FRealtimeMeshLODKey" required>
+  The LOD to add the group to.
+</ParamField>
+
+<ResponseField name="return" type="FRealtimeMeshSectionGroupKey">
+  The auto-generated key for the new group.
+</ResponseField>
+
+---
+
+### UpdateSectionGroup (C++)
+
+```cpp
+TFuture<ERealtimeMeshProxyUpdateStatus> UpdateSectionGroup(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    FRealtimeMeshStreamSet&& MeshData
+);
+
+TFuture<ERealtimeMeshProxyUpdateStatus> UpdateSectionGroup(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    const FRealtimeMeshStreamSet& MeshData
+);
+```
+
+Replaces all streams in an existing section group. The group must already exist.
+
+---
+
+## Section Management
+
+### CreateSection
+
+```cpp
+// C++
+TFuture<ERealtimeMeshProxyUpdateStatus> CreateSection(
+    const FRealtimeMeshSectionKey& SectionKey,
+    const FRealtimeMeshSectionConfig& Config,
+    const FRealtimeMeshStreamRange& StreamRange,
+    bool bShouldCreateCollision = false
+);
+
+// Blueprint
+void CreateSection(
+    const FRealtimeMeshSectionKey& SectionKey,
+    const FRealtimeMeshSectionConfig& Config,
+    const FRealtimeMeshStreamRange& StreamRange,
+    bool bShouldCreateCollision,
+    const FRealtimeMeshSimpleCompletionCallback& OnComplete
+);
+```
+
+Manually creates a section within an existing group. Use this when `bShouldAutoCreateSectionsForPolyGroups = false`.
+
+<ParamField path="SectionKey" type="FRealtimeMeshSectionKey" required>
+  Key uniquely identifying this section within a group.
+</ParamField>
+
+<ParamField path="Config" type="FRealtimeMeshSectionConfig" required>
+  Rendering configuration: material slot, visibility, shadow casting.
+</ParamField>
+
+<ParamField path="StreamRange" type="FRealtimeMeshStreamRange" required>
+  The vertex and index range within the group's streams that this section covers.
+</ParamField>
+
+<ParamField path="bShouldCreateCollision" type="bool">
+  Whether to include this section in the complex collision mesh.
+</ParamField>
+
+---
+
+### UpdateSectionConfig
+
+```cpp
+TFuture<ERealtimeMeshProxyUpdateStatus> UpdateSectionConfig(
+    const FRealtimeMeshSectionKey& SectionKey,
+    const FRealtimeMeshSectionConfig& Config,
+    bool bShouldCreateCollision = false
+);
+```
+
+Updates the rendering configuration of an existing section without changing its stream data.
+
+---
+
+### UpdateSectionRange
+
+```cpp
+TFuture<ERealtimeMeshProxyUpdateStatus> UpdateSectionRange(
+    const FRealtimeMeshSectionKey& SectionKey,
+    const FRealtimeMeshStreamRange& StreamRange
+);
+```
+
+Updates the vertex/index range a section references, without changing its config.
+
+---
+
+## Queries
+
+```cpp
+TArray<FRealtimeMeshLODKey>           GetLODs() const;
+TArray<FRealtimeMeshSectionGroupKey>  GetSectionGroups(const FRealtimeMeshLODKey& LODKey) const;
+TSharedPtr<FRealtimeMeshSectionGroupSimple> GetSectionGroup(const FRealtimeMeshSectionGroupKey& SectionGroupKey) const;
+TArray<FRealtimeMeshSectionKey>       GetSectionsInGroup(const FRealtimeMeshSectionGroupKey& SectionGroupKey);
+FRealtimeMeshSectionConfig            GetSectionConfig(const FRealtimeMeshSectionKey& SectionKey) const;
+bool                                  IsSectionVisible(const FRealtimeMeshSectionKey& SectionKey) const;
+bool                                  IsSectionCastingShadow(const FRealtimeMeshSectionKey& SectionKey) const;
+```
+
+---
+
+## Mesh Data Access
+
+### ProcessMesh
+
+```cpp
+void ProcessMesh(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    const TFunctionRef<void(const FRealtimeMeshStreamSet&)>& ProcessFunc
+) const;
+```
+
+Read-only, thread-safe access to the stream data of a section group. The lambda receives a const reference and executes while the mesh lock is held.
+
+---
+
+### EditMeshInPlace
+
+```cpp
+TFuture<ERealtimeMeshProxyUpdateStatus> EditMeshInPlace(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    const TFunctionRef<TSet<FRealtimeMeshStreamKey>(FRealtimeMeshStreamSet&)>& EditFunc
+);
+```
+
+Mutable, in-place access to the section group's streams. The lambda receives a mutable `FRealtimeMeshStreamSet&` and must return the set of stream keys that were modified. Only the changed streams are uploaded to the GPU.
+
+---
+
+## Section Visibility and Shadow
+
+```cpp
+// C++
+TFuture<ERealtimeMeshProxyUpdateStatus> SetSectionVisibility(const FRealtimeMeshSectionKey& SectionKey, bool bIsVisible);
+TFuture<ERealtimeMeshProxyUpdateStatus> SetSectionCastShadow(const FRealtimeMeshSectionKey& SectionKey, bool bCastShadow);
+
+// Blueprint
+void SetSectionVisibility(const FRealtimeMeshSectionKey& SectionKey, bool bIsVisible,
+    const FRealtimeMeshSimpleCompletionCallback& OnComplete);
+void SetSectionCastShadow(const FRealtimeMeshSectionKey& SectionKey, bool bCastShadow,
+    const FRealtimeMeshSimpleCompletionCallback& OnComplete);
+```
+
+---
+
+## Removal
+
+```cpp
+// C++
+TFuture<ERealtimeMeshProxyUpdateStatus> RemoveSection(const FRealtimeMeshSectionKey& SectionKey);
+TFuture<ERealtimeMeshProxyUpdateStatus> RemoveSectionGroup(const FRealtimeMeshSectionGroupKey& SectionGroupKey);
+
+// Blueprint
+void RemoveSection(const FRealtimeMeshSectionKey& SectionKey, const FRealtimeMeshSimpleCompletionCallback& OnComplete);
+void RemoveSectionGroup(const FRealtimeMeshSectionGroupKey& SectionGroupKey, const FRealtimeMeshSimpleCompletionCallback& OnComplete);
+```
+
+---
+
+## Polygon Group Auto-Sections
+
+```cpp
+void SetShouldAutoCreateSectionsForPolyGroups(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    bool bNewValue
+);
+
+bool ShouldAutoCreateSectionsForPolygonGroups(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey
+) const;
+```
+
+When enabled (default), the system scans the `PolyGroups` index stream after each `UpdateSectionGroup` call and creates/removes sections to match. Disable this to manage sections manually.
+
+---
+
+## Custom Complex Collision
+
+```cpp
+bool HasCustomComplexMeshGeometry() const;
+TFuture<ERealtimeMeshCollisionUpdateResult> ClearCustomComplexMeshGeometry();
+TFuture<ERealtimeMeshCollisionUpdateResult> SetCustomComplexMeshGeometry(FRealtimeMeshComplexGeometry&& InComplexMeshGeometry);
+TFuture<ERealtimeMeshCollisionUpdateResult> SetCustomComplexMeshGeometry(const FRealtimeMeshComplexGeometry& InComplexMeshGeometry);
+void ProcessCustomComplexMeshGeometry(TFunctionRef<void(const FRealtimeMeshComplexGeometry&)> ProcessFunc) const;
+TFuture<ERealtimeMeshCollisionUpdateResult> EditCustomComplexMeshGeometry(TFunctionRef<void(FRealtimeMeshComplexGeometry&)> EditFunc);
+```
+
+Overrides the auto-generated complex collision with a custom geometry. If not set, complex collision is derived from sections that have `bShouldCreateCollision = true`.
+
+---
+
+## Distance Field and Lumen Card
+
+```cpp
+const FRealtimeMeshDistanceField& GetDistanceField() const;
+TFuture<ERealtimeMeshProxyUpdateStatus> SetDistanceField(FRealtimeMeshDistanceField&& InDistanceField);
+TFuture<ERealtimeMeshProxyUpdateStatus> ClearDistanceField();
+
+const FRealtimeMeshCardRepresentation* GetCardRepresentation(const FRealtimeMeshLockContext& LockContext) const;
+TFuture<ERealtimeMeshProxyUpdateStatus> SetCardRepresentation(FRealtimeMeshCardRepresentation&& InCardRepresentation);
+TFuture<ERealtimeMeshProxyUpdateStatus> ClearCardRepresentation();
+```
+
+---
+
+## Collision Configuration
+
+```cpp
+FRealtimeMeshCollisionConfiguration GetCollisionConfig() const;
+
+// C++
+TFuture<ERealtimeMeshCollisionUpdateResult> SetCollisionConfig(
+    const FRealtimeMeshCollisionConfiguration& InCollisionConfig
+);
+
+// Blueprint
+void SetCollisionConfig(
+    const FRealtimeMeshCollisionConfiguration& InCollisionConfig,
+    const FRealtimeMeshSimpleCollisionCompletionCallback& OnComplete
+);
+```
+
+---
+
+## Simple Geometry (Primitive Collision)
+
+```cpp
+FRealtimeMeshSimpleGeometry GetSimpleGeometry() const;
+
+// C++
+TFuture<ERealtimeMeshCollisionUpdateResult> SetSimpleGeometry(
+    const FRealtimeMeshSimpleGeometry& InSimpleGeometry
+);
+
+// Blueprint
+void SetSimpleGeometry(
+    const FRealtimeMeshSimpleGeometry& InSimpleGeometry,
+    const FRealtimeMeshSimpleCollisionCompletionCallback& OnComplete
+);
+```
+
+---
+
+## Reset
+
+```cpp
+virtual void Reset() override;
+```
+
+Clears all LODs, sections, streams, and collision data. The mesh returns to the state it was in right after construction.
+
+---
+
+## Delegates
+
+```cpp
+DECLARE_DYNAMIC_DELEGATE_OneParam(
+    FRealtimeMeshSimpleCompletionCallback,
+    ERealtimeMeshProxyUpdateStatus, ProxyUpdateResult
+);
+
+DECLARE_DYNAMIC_DELEGATE_OneParam(
+    FRealtimeMeshSimpleCollisionCompletionCallback,
+    ERealtimeMeshCollisionUpdateResult, CollisionResult
+);
+```
+
+Both delegates are used as completion callbacks in Blueprint-callable methods. `FRealtimeMeshSimpleCompletionCallback` reports whether the GPU proxy was updated, added, or removed. `FRealtimeMeshSimpleCollisionCompletionCallback` reports whether the physics body cook succeeded.
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="URealtimeMeshComponent" href="/api/realtime-mesh-component">
+    The scene component that renders this mesh.
+  </Card>
+  <Card title="Collision Configuration" href="/api/collision-config">
+    Configure complex and simple collision behavior.
+  </Card>
+  <Card title="Data Streams" href="/api/data-streams">
+    Reference for the stream types used in SectionGroups.
+  </Card>
+</CardGroup>

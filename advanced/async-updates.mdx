@@ -1,0 +1,253 @@
+---
+title: "Async Updates and Futures"
+description: "Understand TFuture return values, batch updates with FRealtimeMeshUpdateContext, and patterns for fire-and-forget or awaited mesh updates."
+---
+
+Every mutation on `URealtimeMeshSimple` — creating section groups, updating streams, changing section visibility, and so on — returns a `TFuture` that resolves once the render-thread proxy has processed the change. Understanding this contract is critical for writing efficient, frame-rate-friendly mesh code.
+
+---
+
+## TFuture\<ERealtimeMeshProxyUpdateStatus\>
+
+All section group and section update functions return:
+
+```cpp
+TFuture<ERealtimeMeshProxyUpdateStatus>
+```
+
+The enum is defined as:
+
+```cpp
+UENUM(BlueprintType)
+enum class ERealtimeMeshProxyUpdateStatus : uint8
+{
+    NoProxy,   // The component has no render proxy — change was applied to CPU data only
+    NoUpdate,  // The proxy exists but nothing needed to change
+    Updated,   // The proxy was updated successfully on the render thread
+};
+```
+
+### Example return values
+
+| Value | When it occurs |
+|---|---|
+| `NoProxy` | The `URealtimeMeshComponent` is not yet registered in the world, or the render proxy was destroyed |
+| `NoUpdate` | The data submitted was identical to what the proxy already had |
+| `Updated` | The render thread received and applied the changes |
+
+---
+
+## TFuture\<ERealtimeMeshCollisionUpdateResult\>
+
+Collision-related calls — `SetCollisionConfig`, `SetSimpleGeometry`, `SetCustomComplexMeshGeometry`, etc. — return:
+
+```cpp
+TFuture<ERealtimeMeshCollisionUpdateResult>
+```
+
+The enum is defined as:
+
+```cpp
+enum class ERealtimeMeshCollisionUpdateResult : uint8
+{
+    Unknown, // Initial state; should not be returned under normal operation
+    Updated, // Collision cook completed and the body was updated
+    Ignored, // No collision cook was needed (e.g., mesh destroyed before cook finished)
+    Error,   // Cook failed
+};
+```
+
+---
+
+## Fire-and-forget
+
+The most common pattern is to ignore the future entirely. RMC applies the update asynchronously and the result is discarded:
+
+```cpp
+// Fire and forget — result is discarded
+Mesh->UpdateSectionGroup(GroupKey, MoveTemp(StreamSet));
+```
+
+This is safe because RMC queues updates in order. A subsequent update to the same section group will always be applied after the previous one.
+
+---
+
+## Awaiting completion with .Then()
+
+When you need to act after the proxy update finishes, chain a `.Then()` callback:
+
+```cpp
+Mesh->CreateSectionGroup(GroupKey, MoveTemp(StreamSet))
+    .Then([](TFuture<ERealtimeMeshProxyUpdateStatus> Future)
+    {
+        const ERealtimeMeshProxyUpdateStatus Status = Future.Get();
+        if (Status == ERealtimeMeshProxyUpdateStatus::Updated)
+        {
+            UE_LOG(LogTemp, Log, TEXT("Render proxy updated successfully."));
+        }
+    });
+```
+
+<Warning>
+The `.Then()` callback is invoked on the render thread. Do not access `UObject` methods, `AActor` state, or other game-thread-only data from within the callback. If you need to act on the game thread, use `AsyncTask(ENamedThreads::GameThread, ...)` inside the callback.
+</Warning>
+
+---
+
+## Blueprint delegate alternatives
+
+Blueprint-exposed versions of the same functions accept dynamic delegates instead of returning futures:
+
+```cpp
+// C++ delegate declarations from RealtimeMeshSimple.h
+DECLARE_DYNAMIC_DELEGATE_OneParam(
+    FRealtimeMeshSimpleCompletionCallback,
+    ERealtimeMeshProxyUpdateStatus, ProxyUpdateResult);
+
+DECLARE_DYNAMIC_DELEGATE_OneParam(
+    FRealtimeMeshSimpleCollisionCompletionCallback,
+    ERealtimeMeshCollisionUpdateResult, CollisionResult);
+```
+
+Pass an instance of these delegates to the Blueprint-callable overloads:
+
+```cpp
+// Blueprint-callable overload
+UFUNCTION(BlueprintCallable, Category = "Components|RealtimeMesh",
+          meta=(AutoCreateRefTerm="OnComplete"))
+void UpdateSectionGroup(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    URealtimeMeshStreamSet* MeshData,
+    const FRealtimeMeshSimpleCompletionCallback& OnComplete);
+```
+
+These delegates are fired on the game thread after the render thread has finished, making them safe to use with game-thread objects.
+
+---
+
+## Batching updates with FRealtimeMeshUpdateContext
+
+Each individual API call (e.g., `CreateSectionGroup`, `UpdateSectionConfig`) internally creates an `FRealtimeMeshUpdateContext`, acquires the mesh lock, runs, then commits a render-thread command. If you call several functions in sequence, each one pays this overhead independently.
+
+`FRealtimeMeshUpdateContext` lets you batch multiple changes under a single lock acquisition and a single render-thread command packet:
+
+```cpp
+// From RealtimeMeshUpdateBuilder.h
+struct FRealtimeMeshUpdateContext : public FRealtimeMeshLockContext
+{
+    // ... (acquires write guard on construction)
+    TFuture<ERealtimeMeshProxyUpdateStatus> Commit();
+};
+```
+
+### Why batching is more efficient
+
+- **One lock acquisition** — each individual call acquires and releases the mesh's read-write lock. Batching acquires it once.
+- **One render-thread flush** — changes go to the GPU in a single command packet rather than several.
+- **Fewer proxy recreations** — static draw-type section groups rebuild their proxy on every change. Inside a single context, only one rebuild happens at the end.
+
+### Using FRealtimeMeshUpdateContext via FRealtimeMeshUpdateBuilder
+
+`FRealtimeMeshUpdateBuilder` is the public helper for building batched updates. Add tasks that take an `FRealtimeMeshUpdateContext&` and your concrete mesh type, then call `Commit`:
+
+```cpp
+#include "Data/RealtimeMeshUpdateBuilder.h"
+using namespace RealtimeMesh;
+
+void ApplyBatchedChanges(URealtimeMeshSimple* Mesh,
+                         const FRealtimeMeshSectionGroupKey& GroupKey,
+                         FRealtimeMeshStreamSet&& NewStreams,
+                         const FRealtimeMeshSectionKey& SectionKey)
+{
+    FRealtimeMeshUpdateBuilder Builder;
+
+    Builder.AddMeshTask<FRealtimeMeshSimple>(
+        [GroupKey, Streams = MoveTemp(NewStreams)](FRealtimeMeshUpdateContext& Ctx,
+                                                   FRealtimeMeshSimple& SimpleMesh) mutable
+        {
+            SimpleMesh.UpdateSectionGroup(Ctx.GetSharedResources(), GroupKey,
+                                          MoveTemp(Streams));
+        });
+
+    Builder.AddSectionTask(SectionKey,
+        [](FRealtimeMeshUpdateContext& Ctx, FRealtimeMeshSection& Section)
+        {
+            // Additional section-level changes
+        });
+
+    // Single future for the entire batch
+    TFuture<ERealtimeMeshProxyUpdateStatus> Future =
+        Builder.Commit(Mesh->GetMeshData());
+}
+```
+
+<Note>
+For most use cases the high-level `URealtimeMeshSimple` API (which creates its own context internally) is sufficient. Use `FRealtimeMeshUpdateBuilder` only when profiling shows that individual per-call lock overhead is a bottleneck.
+</Note>
+
+---
+
+## Common patterns
+
+### Updating mesh on tick
+
+Build the stream data off the game thread, then submit on tick. Avoid blocking the game thread waiting for the future.
+
+```cpp
+void AMyActor::Tick(float DeltaTime)
+{
+    Super::Tick(DeltaTime);
+
+    if (!bMeshDirty)
+    {
+        return;
+    }
+    bMeshDirty = false;
+
+    // Build stream set (can be done on a background thread with Async())
+    FRealtimeMeshStreamSet NewStreams;
+    BuildMyMesh(NewStreams);
+
+    // Submit — fire and forget
+    RealtimeMesh->UpdateSectionGroup(GroupKey, MoveTemp(NewStreams));
+}
+```
+
+### Throttling updates
+
+If your source data changes faster than the render thread can consume updates, gate submissions so only one is in flight at a time:
+
+```cpp
+std::atomic<bool> bUpdateInFlight = false;
+
+void SubmitIfIdle(URealtimeMeshSimple* Mesh,
+                  const FRealtimeMeshSectionGroupKey& GroupKey,
+                  FRealtimeMeshStreamSet StreamSet)
+{
+    if (bUpdateInFlight.exchange(true))
+    {
+        return; // Previous update still pending, drop this one
+    }
+
+    Mesh->UpdateSectionGroup(GroupKey, MoveTemp(StreamSet))
+        .Then([](TFuture<ERealtimeMeshProxyUpdateStatus>)
+        {
+            bUpdateInFlight.store(false);
+        });
+}
+```
+
+### Collision updates
+
+Collision cooking is asynchronous and may take several frames. Check the result to detect cook failures:
+
+```cpp
+Mesh->SetCollisionConfig(CollisionConfig)
+    .Then([](TFuture<ERealtimeMeshCollisionUpdateResult> Future)
+    {
+        if (Future.Get() == ERealtimeMeshCollisionUpdateResult::Error)
+        {
+            // Handle cook error
+        }
+    });
+```

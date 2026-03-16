@@ -1,0 +1,210 @@
+---
+title: "Data streams"
+description: "How vertex and index data is organised into typed FRealtimeMeshStream buffers inside an FRealtimeMeshStreamSet."
+---
+
+All geometry data in the RMC is stored in typed buffers called streams. A collection of streams that together describe one section group's geometry is an `FRealtimeMeshStreamSet`. Understanding streams is necessary when you use the low-level API or need to build custom buffer layouts.
+
+## FRealtimeMeshStream
+
+`FRealtimeMeshStream` is a CPU-side typed buffer — functionally similar to a `TArray<uint8>` with a known element layout. Each stream has:
+
+- A `FRealtimeMeshStreamKey` that identifies its type (vertex or index) and name
+- A `FRealtimeMeshBufferLayout` that describes the element type and number of elements per row
+- A stride-based memory layout for efficient GPU upload
+
+```cpp
+// Create a position stream manually
+FRealtimeMeshStream PositionStream = FRealtimeMeshStream::Create<FVector3f>(
+    FRealtimeMeshStreams::Position);
+
+// Append positions
+PositionStream.Add(FVector3f(0.f, 0.f, 0.f));
+PositionStream.Add(FVector3f(100.f, 0.f, 0.f));
+PositionStream.Add(FVector3f(50.f, 0.f, 100.f));
+```
+
+## ERealtimeMeshStreamType
+
+The stream type classifies a stream as either vertex data or index data:
+
+```cpp
+// RealtimeMeshStreamRange.h
+enum class ERealtimeMeshStreamType : uint8
+{
+    Unknown,
+    Vertex,   // Per-vertex attributes: positions, normals, UVs, colors
+    Index,    // Triangle indices and polygon group indices
+};
+```
+
+## FRealtimeMeshStreamKey
+
+Every stream is uniquely identified by an `FRealtimeMeshStreamKey`, which combines a stream type with a name:
+
+```cpp
+// Construct a key directly
+FRealtimeMeshStreamKey Key(ERealtimeMeshStreamType::Vertex, FName("Position"));
+
+// Or use the pre-defined constants from FRealtimeMeshStreams
+FRealtimeMeshStreamKey PosKey = FRealtimeMeshStreams::Position;
+```
+
+## Standard stream names
+
+The `FRealtimeMeshStreams` struct defines constants for all built-in streams. Using these constants ensures your buffers are recognised by the rendering system.
+
+### Vertex streams
+
+| Constant | Name string | Type | Purpose |
+|---|---|---|---|
+| `FRealtimeMeshStreams::Position` | `"Position"` | `FVector3f` | Per-vertex world-space position |
+| `FRealtimeMeshStreams::Tangents` | `"Tangents"` | `TRealtimeMeshTangents<T>` | Packed normal + tangent (W stores binormal sign) |
+| `FRealtimeMeshStreams::TexCoords` | `"TexCoords"` | `TRealtimeMeshTexCoords<T, N>` | UV channels (up to 4) |
+| `FRealtimeMeshStreams::Color` | `"Color"` | `FColor` | Per-vertex RGBA color |
+
+### Index streams
+
+| Constant | Name string | Purpose |
+|---|---|---|
+| `FRealtimeMeshStreams::Triangles` | `"Triangles"` | Main triangle index buffer |
+| `FRealtimeMeshStreams::DepthOnlyTriangles` | `"DepthOnlyTriangles"` | Simplified index buffer for depth/shadow passes |
+| `FRealtimeMeshStreams::ReversedTriangles` | `"ReversedTriangles"` | Reversed-winding version of the main triangles |
+| `FRealtimeMeshStreams::PolyGroups` | `"PolyGroups"` | Per-triangle polygon group index |
+| `FRealtimeMeshStreams::DepthOnlyPolyGroups` | `"DepthOnlyPolyGroups"` | Polygon groups for the depth-only triangle buffer |
+
+<Note>
+  The `PolyGroups` stream stores `FRealtimeMeshPolygonGroupRange` entries, each describing a contiguous run of triangles that share the same polygon group index. The RMC uses this to auto-create one section per polygon group when `bAutoCreateSectionsForPolygonGroups` is true.
+</Note>
+
+## Buffer type system
+
+The RMC uses a trait-based type system to map C++ types to GPU element formats. This allows transparent conversion between precision variants at upload time.
+
+### Tangent types
+
+| Type | Storage | Precision | Bytes per vertex |
+|---|---|---|---|
+| `TRealtimeMeshTangents<FVector4f>` | `Float` × 4, two elements | Full float | 32 |
+| `TRealtimeMeshTangentsNormalPrecision` | `FPackedNormal` × 2 | `Int8Float` packed | 8 |
+| `TRealtimeMeshTangentsHighPrecision` | `FPackedRGBA16N` × 2 | 16-bit signed normalized | 16 |
+
+Both `FPackedNormal` (8-bit per channel, 4 channels) and `FPackedRGBA16N` (16-bit per channel, 4 channels) store the normal in XYZ and the binormal flip sign in W.
+
+### UV types
+
+| Type | Storage | Bytes per channel |
+|---|---|---|
+| `TRealtimeMeshTexCoordsHighPri<N>` | `FVector2f` | 8 per channel |
+| `TRealtimeMeshTexCoordsNormal<N>` | `FVector2DHalf` | 4 per channel |
+
+The type parameter `N` controls how many UV channels are packed into a single stream row (1–4).
+
+### Index types
+
+| Type | Storage | Max vertices |
+|---|---|---|
+| `FIndex3US` (`TIndex3<uint16>`) | 16-bit unsigned | 65,535 |
+| `FIndex3UI` (`TIndex3<uint32>`) | 32-bit unsigned | ~4 billion |
+
+Choose `uint16` indices for meshes with fewer than 65,536 vertices — they use half the GPU memory and typically perform better on mobile.
+
+## FRealtimeMeshStreamSet
+
+`FRealtimeMeshStreamSet` is a map from `FRealtimeMeshStreamKey` to `FRealtimeMeshStream`. You build one and pass it to `CreateSectionGroup` or `UpdateSectionGroup`:
+
+```cpp
+FRealtimeMeshStreamSet StreamSet;
+
+// AddStream creates a stream with the given key and layout
+auto& Positions = StreamSet.AddStream<FVector3f>(
+    ERealtimeMeshStreamType::Vertex, FName("Position"));
+auto& Tangents  = StreamSet.AddStream<FRealtimeMeshTangentsNormalPrecision>(
+    ERealtimeMeshStreamType::Vertex, FName("Tangents"));
+auto& TexCoords = StreamSet.AddStream<FRealtimeMeshTexCoordsNormal>(
+    ERealtimeMeshStreamType::Vertex, FName("TexCoords"));
+auto& Triangles = StreamSet.AddStream<FIndex3US>(
+    ERealtimeMeshStreamType::Index, FName("Triangles"));
+```
+
+<Tip>
+  In most cases you should use `TRealtimeMeshBuilderLocal` instead of constructing `FRealtimeMeshStreamSet` manually. The builder creates the correct streams for you and provides a fluent `AddVertex` / `AddTriangle` API. See the [quickstart](/quickstart) for an example.
+</Tip>
+
+## FRealtimeMeshStreamRange
+
+`FRealtimeMeshStreamRange` defines the slice of a section group's buffers that one section renders. It stores two inclusive `FInt32Range` values — one for vertex indices and one for triangle indices:
+
+```cpp
+// RealtimeMeshStreamRange.h
+struct FRealtimeMeshStreamRange
+{
+    FInt32Range Vertices;  // [MinVertex, MaxVertex]
+    FInt32Range Indices;   // [MinIndex, MaxIndex]
+};
+```
+
+When you use `CreateSectionGroup` with auto section creation, the RMC computes stream ranges automatically from the polygon group stream. When you call `CreateSection` manually, you supply the range yourself:
+
+```cpp
+// Manual section — covers vertices 0–99 and indices 0–149
+FRealtimeMeshStreamRange Range(0, 99, 0, 149);
+RMesh->CreateSection(SectionKey, FRealtimeMeshSectionConfig(0), Range);
+```
+
+## Complete stream setup example
+
+```cpp
+using namespace RealtimeMesh;
+
+// Build streams manually for a single triangle
+FRealtimeMeshStreamSet StreamSet;
+
+// Vertex streams
+auto& Positions = StreamSet.AddStream<FVector3f>(
+    FRealtimeMeshStreams::Position);
+auto& Tangents  = StreamSet.AddStream<FRealtimeMeshTangentsNormalPrecision>(
+    FRealtimeMeshStreams::Tangents);
+auto& UVs       = StreamSet.AddStream<FRealtimeMeshTexCoordsNormal>(
+    FRealtimeMeshStreams::TexCoords);
+
+// Index stream
+auto& Indices = StreamSet.AddStream<FIndex3US>(
+    FRealtimeMeshStreams::Triangles);
+
+// Add three vertices
+Positions.Add(FVector3f(-50.f, 0.f,   0.f));
+Positions.Add(FVector3f(  0.f, 0.f, 100.f));
+Positions.Add(FVector3f( 50.f, 0.f,   0.f));
+
+FRealtimeMeshTangentsNormalPrecision T(
+    FVector3f(0.f, -1.f, 0.f), FVector3f(1.f, 0.f, 0.f));
+Tangents.Add(T); Tangents.Add(T); Tangents.Add(T);
+
+UVs.Add(FRealtimeMeshTexCoordsNormal(FVector2f(0.f, 0.f)));
+UVs.Add(FRealtimeMeshTexCoordsNormal(FVector2f(0.5f, 1.f)));
+UVs.Add(FRealtimeMeshTexCoordsNormal(FVector2f(1.f, 0.f)));
+
+// One triangle
+Indices.Add(FIndex3US(0, 1, 2));
+
+// Upload — stream range covers all vertices and indices
+const FRealtimeMeshSectionGroupKey GroupKey =
+    FRealtimeMeshSectionGroupKey::Create(0, FName("Triangle"));
+RMesh->CreateSectionGroup(GroupKey, StreamSet);
+
+// Create a section that covers the full range
+const FRealtimeMeshSectionKey SectionKey =
+    FRealtimeMeshSectionKey::Create(GroupKey, FName("Main"));
+RMesh->CreateSection(SectionKey, FRealtimeMeshSectionConfig(0),
+    FRealtimeMeshStreamRange(0, 2, 0, 2));
+```
+
+<CardGroup cols={2}>
+  <Card title="Architecture overview" icon="diagram-project" href="/concepts/architecture">
+    How stream data flows from the CPU to the GPU proxy.
+  </Card>
+  <Card title="LOD system" icon="layer-group" href="/concepts/lod-system">
+    Use separate stream sets per LOD for distance-based complexity reduction.
+  </Card>
+</CardGroup>

@@ -1,0 +1,227 @@
+---
+title: "Mesh hierarchy"
+description: "The five-level object hierarchy in the Realtime Mesh Component: Component, Mesh, LOD, SectionGroup, and Section."
+---
+
+Every renderable mesh in RMC is organised as a five-level hierarchy. Understanding each level — and the key type that identifies it — is essential before you write any geometry code.
+
+```
+URealtimeMeshComponent
+└─ URealtimeMesh  (URealtimeMeshSimple in practice)
+   └─ FRealtimeMeshLOD          [FRealtimeMeshLODKey]
+      └─ FRealtimeMeshSectionGroup   [FRealtimeMeshSectionGroupKey]
+         ├─ FRealtimeMeshStream  (vertex / index buffers)
+         └─ FRealtimeMeshSection     [FRealtimeMeshSectionKey]
+```
+
+## URealtimeMeshComponent
+
+`URealtimeMeshComponent` is the scene component you place in the world. It inherits from `UMeshComponent` and is responsible for:
+
+- Owning a reference to a `URealtimeMesh` asset and binding its events
+- Creating the `FPrimitiveSceneProxy` that drives GPU rendering
+- Forwarding collision body setup to the physics engine
+- Exposing material slots to the editor and Blueprint
+
+The component does not own any geometry data itself. All geometry lives in the `URealtimeMesh` it references.
+
+```cpp
+// Initialise the component to use URealtimeMeshSimple and get a typed pointer
+URealtimeMeshSimple* RMesh =
+    GetRealtimeMeshComponent()->InitializeRealtimeMesh<URealtimeMeshSimple>();
+```
+
+You can also assign a pre-existing mesh asset at runtime:
+
+```cpp
+GetRealtimeMeshComponent()->SetRealtimeMesh(ExistingMeshAsset);
+```
+
+## URealtimeMesh / URealtimeMeshSimple
+
+`URealtimeMesh` is an abstract `UObject` that wraps the internal `FRealtimeMesh` and exposes Blueprint-callable methods for LOD management, material slots, bounds, and collision.
+
+`URealtimeMeshSimple` is the concrete subclass you use for runtime procedural geometry. It adds:
+
+- `CreateSectionGroup` / `UpdateSectionGroup` for uploading stream data
+- `CreateSection` / `UpdateSectionConfig` for manual section control
+- Collision configuration via `SetCollisionConfig` and `SetSimpleGeometry`
+- Nanite resources, distance fields, and Lumen card representations
+
+The mesh object can be shared by multiple components and is network-replicable.
+
+<Note>
+  `URealtimeMesh` supports serialization of mesh data when `bShouldSerializeMeshData` is set to `true`. This is useful when you want to persist procedurally generated geometry across editor sessions.
+</Note>
+
+## FRealtimeMeshLOD
+
+Each LOD is an independent set of section groups. LODs are identified by a zero-based integer index wrapped in `FRealtimeMeshLODKey`.
+
+The LOD configuration is stored in `FRealtimeMeshLODConfig`:
+
+```cpp
+// RealtimeMeshLODConfig.h
+struct FRealtimeMeshLODConfig
+{
+    bool  bIsVisible;   // Whether this LOD is rendered at all
+    float ScreenSize;   // Screen-size threshold below which this LOD activates
+};
+```
+
+LOD 0 is always the highest-detail level. Higher index numbers are lower detail and activate when the mesh appears small on screen.
+
+Add LODs through `URealtimeMesh::AddLOD`:
+
+```cpp
+// Add LOD 0 (always present, ScreenSize ignored for LOD 0)
+FRealtimeMeshLODKey LOD0 = RMesh->AddLOD(FRealtimeMeshLODConfig(0.0f));
+
+// Add LOD 1 — activates when screen size falls below 0.25
+FRealtimeMeshLODKey LOD1 = RMesh->AddLOD(FRealtimeMeshLODConfig(0.25f));
+```
+
+## FRealtimeMeshSectionGroup
+
+A section group is the container that holds the actual vertex and index streams. One section group corresponds to one set of GPU buffers. Sections within a group share those buffers and reference sub-ranges of them.
+
+`FRealtimeMeshSectionGroupConfig` controls whether the group uses a static or dynamic rendering path:
+
+```cpp
+// RealtimeMeshSectionGroupConfig.h
+enum class ERealtimeMeshSectionDrawType : uint8
+{
+    Static,   // Lower overhead; proxy recreated on geometry change
+    Dynamic,  // Slightly higher overhead; geometry can update in place
+};
+
+struct FRealtimeMeshSectionGroupConfig
+{
+    ERealtimeMeshSectionDrawType DrawType;
+};
+```
+
+Use `Dynamic` for meshes that update frequently (per-frame terrain, particles). Use `Static` for meshes that rarely change.
+
+### Auto section creation for polygon groups
+
+When you call `CreateSectionGroup` with a stream set that includes a `PolyGroups` stream, the section group automatically creates one `FRealtimeMeshSection` per unique polygon group index. This is controlled by:
+
+```cpp
+// FRealtimeMeshSectionGroupSimple member
+uint8 bAutoCreateSectionsForPolygonGroups : 1;  // defaults to true
+```
+
+You can disable this and manage sections manually:
+
+```cpp
+RMesh->SetShouldAutoCreateSectionsForPolyGroups(GroupKey, false);
+```
+
+## FRealtimeMeshSection
+
+A section represents a single draw call. It references a range of vertices and indices from its parent section group's buffers (the `FRealtimeMeshStreamRange`) and maps to one material slot.
+
+`FRealtimeMeshSectionConfig` controls all per-section rendering flags:
+
+```cpp
+// RealtimeMeshSectionConfig.h
+struct FRealtimeMeshSectionConfig
+{
+    int32 MaterialSlot;         // Index into the mesh's material slot array
+    bool  bIsVisible;           // Whether the section renders at all
+    bool  bCastsShadow;         // Whether the section casts shadows
+    bool  bIsMainPassRenderable;// Whether the section renders in the main pass
+    bool  bForceOpaque;         // Force opaque rendering regardless of material
+};
+```
+
+The default constructor sets `MaterialSlot = 0`, `bIsVisible = true`, `bCastsShadow = true`, `bIsMainPassRenderable = true`, and `bForceOpaque = false`.
+
+## Key types
+
+Each level in the hierarchy is addressed by a strongly-typed key. Keys embed their parent context, so a section key implicitly knows its LOD and section group.
+
+<AccordionGroup>
+  <Accordion title="FRealtimeMeshLODKey">
+    Wraps a single `int8` LOD index. Constructable from an integer:
+
+    ```cpp
+    FRealtimeMeshLODKey LOD0(0);  // LOD index 0
+    ```
+  </Accordion>
+
+  <Accordion title="FRealtimeMeshSectionGroupKey">
+    Combines an LOD index with a group name (`FName`). Create with the static factory:
+
+    ```cpp
+    // Named group
+    auto Key = FRealtimeMeshSectionGroupKey::Create(LOD0, FName("Terrain"));
+
+    // Integer-indexed group (name becomes "Group_N")
+    auto Key = FRealtimeMeshSectionGroupKey::Create(LOD0, 0);
+
+    // Unique name based on a new GUID
+    auto Key = FRealtimeMeshSectionGroupKey::CreateUnique(LOD0);
+    ```
+  </Accordion>
+
+  <Accordion title="FRealtimeMeshSectionKey">
+    Combines an LOD index, a group name, and a section name. The most common factory for auto-created poly group sections is:
+
+    ```cpp
+    // Section for polygon group index 0
+    auto SectionKey = FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 0);
+
+    // Named section
+    auto SectionKey = FRealtimeMeshSectionKey::Create(GroupKey, FName("Water"));
+
+    // Integer-indexed section (name becomes "Section_N")
+    auto SectionKey = FRealtimeMeshSectionKey::Create(GroupKey, 0);
+    ```
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  Keys are value types — they are cheap to copy and pass by value. Store a `FRealtimeMeshSectionGroupKey` alongside your section group data so you can reference it later for updates.
+</Tip>
+
+## Putting it together
+
+```cpp
+using namespace RealtimeMesh;
+
+// 1. Initialize the mesh
+URealtimeMeshSimple* RMesh =
+    GetRealtimeMeshComponent()->InitializeRealtimeMesh<URealtimeMeshSimple>();
+
+// 2. Create a section group key for LOD 0
+const FRealtimeMeshSectionGroupKey GroupKey =
+    FRealtimeMeshSectionGroupKey::Create(0, FName("MainGeometry"));
+
+// 3. Section keys for poly group auto-sections
+const FRealtimeMeshSectionKey SectionKey0 =
+    FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 0);
+const FRealtimeMeshSectionKey SectionKey1 =
+    FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 1);
+
+// 4. Register material slots
+RMesh->SetupMaterialSlot(0, "Rock");
+RMesh->SetupMaterialSlot(1, "Grass");
+
+// 5. Upload stream data — sections are auto-created from poly groups
+RMesh->CreateSectionGroup(GroupKey, StreamSet);
+
+// 6. Bind sections to material slots
+RMesh->UpdateSectionConfig(SectionKey0, FRealtimeMeshSectionConfig(0));
+RMesh->UpdateSectionConfig(SectionKey1, FRealtimeMeshSectionConfig(1));
+```
+
+<CardGroup cols={2}>
+  <Card title="Data streams" icon="database" href="/concepts/data-streams">
+    How vertex and index buffers are structured inside a section group.
+  </Card>
+  <Card title="LOD system" icon="layer-group" href="/concepts/lod-system">
+    Managing multiple levels of detail on a single mesh.
+  </Card>
+</CardGroup>

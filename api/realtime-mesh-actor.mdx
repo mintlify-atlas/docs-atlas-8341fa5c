@@ -1,0 +1,183 @@
+---
+title: "ARealtimeMeshActor"
+description: "A convenience actor wrapping URealtimeMeshComponent with Blueprint-friendly mesh generation events."
+---
+
+`ARealtimeMeshActor` is a ready-to-use AActor subclass that owns a `URealtimeMeshComponent` and exposes a `OnGenerateMesh` BlueprintNativeEvent. Subclass it in Blueprint or C++ to generate procedural meshes without writing actor boilerplate.
+
+```
+Inheritance: AActor → ARealtimeMeshActor
+UCLASS: ConversionRoot, ComponentWrapperClass, ClassGroup=RealtimeMesh
+```
+
+---
+
+## Properties
+
+<ResponseField name="RealtimeMeshComponent" type="TObjectPtr&lt;URealtimeMeshComponent&gt;">
+  The mesh component owned by this actor. Visible in the editor, Blueprint-readable. Access via `GetRealtimeMeshComponent()`.
+</ResponseField>
+
+<ResponseField name="bDeferGeneration" type="bool">
+  When `true`, mesh generation moves out of the Construction Script (which runs every frame while dragging the actor) and into the `OnGenerateMesh` event. Greatly improves editor performance for expensive generators. Default: `false`.
+</ResponseField>
+
+<ResponseField name="bFrozen" type="bool">
+  When `true`, automatic rebuilds are suspended. The mesh can still be modified by explicitly calling functions, but `OnGenerateMesh` will not be re-invoked by the actor lifecycle. Default: `false`.
+</ResponseField>
+
+<ResponseField name="bResetOnRebuild" type="bool">
+  When `true`, the `URealtimeMeshSimple` is reset before `OnGenerateMesh` fires, ensuring a clean slate on each rebuild. Default: `true`.
+</ResponseField>
+
+---
+
+## Methods
+
+### GetRealtimeMeshComponent
+
+```cpp
+URealtimeMeshComponent* GetRealtimeMeshComponent() const;
+```
+
+Returns the `URealtimeMeshComponent` owned by this actor.
+
+---
+
+### MakeStream
+
+```cpp
+URealtimeMeshStream* MakeStream(
+    const FRealtimeMeshStreamKey& StreamKey,
+    ERealtimeMeshSimpleStreamType StreamType,
+    int32 NumElements
+);
+```
+
+Allocates a new `URealtimeMeshStream` for Blueprint use.
+
+<ParamField path="StreamKey" type="const FRealtimeMeshStreamKey&" required>
+  The key identifying this stream (stream type + name).
+</ParamField>
+
+<ParamField path="StreamType" type="ERealtimeMeshSimpleStreamType" required>
+  The data format of each element in the stream.
+</ParamField>
+
+<ParamField path="NumElements" type="int32" required>
+  The number of elements per row (e.g., `3` for a triangle index stream).
+</ParamField>
+
+<ResponseField name="return" type="URealtimeMeshStream*">
+  The newly created stream object.
+</ResponseField>
+
+---
+
+### MakeStreamSet
+
+```cpp
+URealtimeMeshStreamSet* MakeStreamSet();
+```
+
+Creates an empty `URealtimeMeshStreamSet` for Blueprint use. Streams can be added to it with `AddStream`.
+
+---
+
+### MakeMeshBuilder
+
+```cpp
+URealtimeMeshLocalBuilder* MakeMeshBuilder(
+    ERealtimeMeshSimpleStreamConfig WantedTangents    = ERealtimeMeshSimpleStreamConfig::Normal,
+    ERealtimeMeshSimpleStreamConfig WantedTexCoords   = ERealtimeMeshSimpleStreamConfig::Normal,
+    bool bWants32BitIndices                           = false,
+    ERealtimeMeshSimpleStreamConfig WantedPolyGroupType = ERealtimeMeshSimpleStreamConfig::None,
+    bool bWantsColors                                 = true,
+    int32 WantedTexCoordChannels                      = 1,
+    bool bKeepExistingData                            = true
+);
+```
+
+Creates a `URealtimeMeshLocalBuilder` pre-configured for the requested stream layout. This is the recommended way to start building mesh data in Blueprint.
+
+<ParamField path="WantedTangents" type="ERealtimeMeshSimpleStreamConfig">
+  Precision of the tangent/normal stream. `None` omits it, `Normal` uses `FPackedNormal` (8-bit), `HighPrecision` uses `FPackedRGBA16N` (16-bit).
+</ParamField>
+
+<ParamField path="WantedTexCoords" type="ERealtimeMeshSimpleStreamConfig">
+  Precision of UV coordinates. `Normal` uses half-float (`FVector2DHalf`), `HighPrecision` uses full float (`FVector2f`).
+</ParamField>
+
+<ParamField path="bWants32BitIndices" type="bool">
+  When `true`, the triangle index buffer uses `uint32` (supports > 65 535 vertices). When `false`, uses `uint16`.
+</ParamField>
+
+<ParamField path="WantedPolyGroupType" type="ERealtimeMeshSimpleStreamConfig">
+  Whether to include a polygon group stream for multi-material meshes. `None` disables it.
+</ParamField>
+
+<ParamField path="bWantsColors" type="bool">
+  Whether to include a per-vertex color stream.
+</ParamField>
+
+<ParamField path="WantedTexCoordChannels" type="int32">
+  Number of UV channels (1–4).
+</ParamField>
+
+<ParamField path="bKeepExistingData" type="bool">
+  When reinitializing an existing builder, whether to preserve existing data in the streams.
+</ParamField>
+
+<ResponseField name="return" type="URealtimeMeshLocalBuilder*">
+  The configured builder object, ready for vertex and triangle additions.
+</ResponseField>
+
+---
+
+### OnGenerateMesh
+
+```cpp
+UFUNCTION(BlueprintNativeEvent, CallInEditor, Category = "Events")
+void OnGenerateMesh();
+```
+
+Override this event in a Blueprint or C++ subclass to build the mesh. It is called when:
+- The actor is placed or moved in the editor (if `bDeferGeneration = true`).
+- `ExecuteRebuildGeneratedMeshIfPending()` is called with a pending rebuild.
+
+The default C++ implementation is empty.
+
+---
+
+### ExecuteRebuildGeneratedMeshIfPending
+
+```cpp
+virtual void ExecuteRebuildGeneratedMeshIfPending();
+```
+
+Fires `OnGenerateMesh` if the actor has been marked for a rebuild (set in `OnConstruction`). After firing, the pending flag is cleared. Safe to call from anywhere on the game thread.
+
+---
+
+## ERealtimeMeshSimpleStreamConfig
+
+Controls which precision variant is created for tangent and UV streams.
+
+| Value | Description |
+|---|---|
+| `None` | The stream is omitted entirely. |
+| `Normal` | Standard precision: tangents use `FPackedNormal` (4 bytes), UVs use `FVector2DHalf` (4 bytes). |
+| `HighPrecision` | High precision: tangents use `FPackedRGBA16N` (8 bytes), UVs use `FVector2f` (8 bytes). |
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="URealtimeMeshComponent" href="/api/realtime-mesh-component">
+    The component owned by this actor.
+  </Card>
+  <Card title="Blueprint Mesh Builder" href="/api/mesh-builder">
+    Detailed reference for URealtimeMeshLocalBuilder used in OnGenerateMesh.
+  </Card>
+</CardGroup>

@@ -1,0 +1,212 @@
+---
+title: "Networking and Replication"
+description: "How URealtimeMeshComponent replicates, what is and is not sent over the network, and best practices for server-authoritative procedural meshes."
+---
+
+`URealtimeMeshComponent` is network-aware and supports property replication. Understanding exactly what is replicated — and what is not — is essential before building multiplayer procedural geometry.
+
+---
+
+## What is replicated
+
+`URealtimeMeshComponent` overrides `IsSupportedForNetworking` to return `true`:
+
+```cpp
+// From RealtimeMeshComponent.h
+virtual bool IsSupportedForNetworking() const override
+{
+    return true;
+}
+```
+
+The component holds a single replicated property:
+
+```cpp
+UPROPERTY(EditAnywhere, BlueprintReadOnly, Replicated, Category = RealtimeMesh,
+          Meta = (AllowPrivateAccess = "true", DisplayName = "RealtimeMesh",
+                  ReplicatedUsing="OnRep_RealtimeMesh"))
+TObjectPtr<URealtimeMesh> RealtimeMesh;
+```
+
+Replication is registered via the standard `GetLifetimeReplicatedProps`:
+
+```cpp
+virtual void GetLifetimeReplicatedProps(
+    TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+```
+
+### What "replicated" means here
+
+The `URealtimeMesh` property itself — the `UObject` reference — is replicated. Unreal's object replication will ensure that clients receive a reference to the same `URealtimeMesh` subobject that the server owns.
+
+<Warning>
+**Mesh geometry is not replicated.** Vertex positions, indices, tangents, UVs, colors, and all other stream data live exclusively on the CPU of whichever machine built the mesh. Stream data is never serialized into the network channel.
+
+When the component replicates, clients receive the `URealtimeMesh` object reference, but that object arrives empty. The client must rebuild the geometry itself.
+</Warning>
+
+---
+
+## OnRep_RealtimeMesh callback
+
+When the replicated `RealtimeMesh` property changes on a client, Unreal invokes the `OnRep_RealtimeMesh` callback:
+
+```cpp
+UFUNCTION()
+void OnRep_RealtimeMesh(class URealtimeMesh* OldRealtimeMesh);
+```
+
+The callback receives the previous value as `OldRealtimeMesh`. Use it to unbind from the old mesh's events and bind to the new one:
+
+```cpp
+// Default behavior inside URealtimeMeshComponent:
+void URealtimeMeshComponent::OnRep_RealtimeMesh(URealtimeMesh* OldRealtimeMesh)
+{
+    UnbindFromEvents(OldRealtimeMesh);
+    BindToEvents(RealtimeMesh);
+    // Triggers a bounds/render update
+}
+```
+
+You can respond to this callback in Blueprint or override it in a subclass to trigger geometry generation when the client first receives the mesh object.
+
+---
+
+## Server-authoritative mesh generation
+
+The standard pattern is:
+
+1. The server builds and holds the authoritative mesh parameters (procedural inputs, seeds, level state).
+2. The server replicates those *parameters* to clients (not geometry).
+3. Each client generates the identical geometry locally using the replicated parameters.
+
+<Steps>
+  <Step title="Define replicated parameters on your actor">
+    Store mesh-generation inputs as replicated properties on the owning actor, not raw geometry data.
+
+    ```cpp
+    UPROPERTY(Replicated)
+    int32 ProcSeed;
+
+    UPROPERTY(Replicated)
+    float MeshScale;
+    ```
+  </Step>
+
+  <Step title="Rebuild geometry on RepNotify">
+    Mark your parameter property with `ReplicatedUsing` to trigger geometry rebuild when the value arrives:
+
+    ```cpp
+    UPROPERTY(ReplicatedUsing=OnRep_MeshParams)
+    FMyMeshParams MeshParams;
+
+    UFUNCTION()
+    void OnRep_MeshParams();
+    ```
+
+    Inside `OnRep_MeshParams`, call your geometry generation routine:
+
+    ```cpp
+    void AMyProceduralActor::OnRep_MeshParams()
+    {
+        URealtimeMeshSimple* Mesh =
+            RealtimeMeshComponent->GetRealtimeMeshAs<URealtimeMeshSimple>();
+        if (!Mesh)
+        {
+            Mesh = RealtimeMeshComponent->InitializeRealtimeMesh<URealtimeMeshSimple>();
+        }
+
+        FRealtimeMeshStreamSet StreamSet;
+        BuildMeshFromParams(MeshParams, StreamSet); // Your deterministic generation function
+
+        const FRealtimeMeshSectionGroupKey GroupKey =
+            FRealtimeMeshSectionGroupKey::Create(0, FName("Procedural"));
+        Mesh->CreateSectionGroup(GroupKey, MoveTemp(StreamSet));
+    }
+    ```
+  </Step>
+
+  <Step title="Generate on the server too">
+    On the server (and listen server / standalone), generate geometry directly from `BeginPlay` or from the authoritative state change that sets `MeshParams`:
+
+    ```cpp
+    void AMyProceduralActor::BeginPlay()
+    {
+        Super::BeginPlay();
+
+        if (HasAuthority())
+        {
+            GenerateMesh(); // Server always generates locally
+        }
+        // Clients generate in OnRep_MeshParams when params arrive
+    }
+    ```
+  </Step>
+</Steps>
+
+---
+
+## RPC patterns for triggering mesh generation
+
+When a player's action should change the mesh for everyone, use a Server RPC to validate the request and apply the change, then rely on property replication to inform clients:
+
+```cpp
+// Client requests a change
+UFUNCTION(Server, Reliable, WithValidation)
+void ServerRequestMeshChange(FMyMeshParams NewParams);
+
+bool AMyProceduralActor::ServerRequestMeshChange_Validate(FMyMeshParams NewParams)
+{
+    // Validate the request (e.g., range checks, anti-cheat)
+    return NewParams.IsValid();
+}
+
+void AMyProceduralActor::ServerRequestMeshChange_Implementation(FMyMeshParams NewParams)
+{
+    MeshParams = NewParams;      // Replicated property — clients get OnRep_MeshParams
+    GenerateMesh();              // Server generates its own copy immediately
+}
+```
+
+For one-shot events that do not need persistent state (particle bursts, temporary mesh overlays), use a Multicast RPC:
+
+```cpp
+UFUNCTION(NetMulticast, Reliable)
+void MulticastApplyMeshChange(FMyMeshParams NewParams);
+
+void AMyProceduralActor::MulticastApplyMeshChange_Implementation(FMyMeshParams NewParams)
+{
+    MeshParams = NewParams;
+    GenerateMesh();
+}
+```
+
+<Note>
+Multicast RPCs are fired to all current connections at the moment of the call. Clients who join later will not receive the call. If mesh state must persist for late joiners, use replicated properties with `OnRep` callbacks instead.
+</Note>
+
+---
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Keep geometry generation deterministic">
+    Use only the replicated parameters as inputs — no random calls without a seeded RNG, no frame-time-dependent values. Every machine must produce the same vertex positions from the same parameters or physics and collision will disagree between server and clients.
+  </Accordion>
+
+  <Accordion title="Do not replicate raw stream data">
+    Sending vertex buffers through the network channel is wasteful and bypasses Unreal's replication flow. The stream data for a 10 000-vertex mesh can easily exceed 1 MB. Replicate parameters and regenerate locally.
+  </Accordion>
+
+  <Accordion title="Handle InitializeRealtimeMesh carefully">
+    `InitializeRealtimeMesh<URealtimeMeshSimple>()` creates a new `URealtimeMesh` subobject and assigns it to the `RealtimeMesh` property. Call this only once per actor, usually in the constructor or `BeginPlay` on the server. Calling it again will replace the replicated object and force a full re-replicate to all clients.
+  </Accordion>
+
+  <Accordion title="Use Async generation to avoid hitches">
+    On a server running many actors, building mesh geometry synchronously can spike frame time. Wrap the stream-building step in `Async(EAsyncExecution::TaskGraph, ...)` and submit the `FRealtimeMeshStreamSet` to `CreateSectionGroup` from the game thread once the task completes.
+  </Accordion>
+
+  <Accordion title="Collision on dedicated servers">
+    If the server needs collision (for hit detection or physics), set `FRealtimeMeshCollisionConfiguration::bUseAsyncCook = true` to avoid blocking the server game thread during PhysX/Chaos cooking. If the server does not need collision, disable it entirely via `SetCollisionConfig` to skip cooking overhead.
+  </Accordion>
+</AccordionGroup>

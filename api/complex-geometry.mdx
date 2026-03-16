@@ -1,0 +1,169 @@
+---
+title: "FRealtimeMeshComplexGeometry"
+description: "Custom complex collision geometry for realtime meshes."
+---
+
+Complex collision provides per-triangle physics queries (line traces, penetration, complex sweeps). The RMC can derive it automatically from mesh sections or accept a custom `FRealtimeMeshComplexGeometry` via the API.
+
+---
+
+## How Complex Collision Works
+
+By default, `URealtimeMeshSimple` auto-generates complex collision from any section that has `bShouldCreateCollision = true` (set when calling `CreateSection` or `UpdateSectionConfig`). The system triangulates those sections, cooks them with Chaos, and stores the result in a `UBodySetup`.
+
+To use a completely custom collision mesh instead, call `SetCustomComplexMeshGeometry`. Once custom geometry is set, section-derived collision is ignored.
+
+<Info>
+  Complex collision only affects trace and overlap queries, not visual rendering. Enable it selectively on sections to keep cook times low.
+</Info>
+
+---
+
+## FRealtimeMeshCollisionMesh
+
+Represents a single named triangle mesh used for complex collision.
+
+```cpp
+struct REALTIMEMESHCOMPONENT_INTERFACE_API FRealtimeMeshCollisionMesh
+{
+    FName Name; // optional identifier
+
+    // Vertex buffer
+    void SetVertices(const TArray<FVector3f>& InVertices);
+    void SetVertices(TArray<FVector3f>&& InVertices);
+    void ClearVertices();
+    const TArray<FVector3f>& GetVertices() const;
+
+    // Triangle index buffer (TIndex3<int32> = three int32 indices)
+    void SetTriangles(const TArray<TIndex3<int32>>& InTriangles);
+    void SetTriangles(TArray<TIndex3<int32>>&& InTriangles);
+    void ClearTriangles();
+    const TArray<TIndex3<int32>>& GetTriangles() const;
+
+    // Per-triangle material indices
+    void SetMaterials(const TArray<uint16>& InMaterials);
+    void SetMaterials(TArray<uint16>&& InMaterials);
+    void ClearMaterials();
+    const TArray<uint16>& GetMaterials() const;
+
+    // UV channels for UV hit reporting
+    void SetTexCoords(const TArray<TArray<FVector2f>>& InTexCoords);
+    void SetTexCoords(TArray<TArray<FVector2f>>&& InTexCoords);
+    void ClearTexCoords();
+    const TArray<TArray<FVector2f>>& GetTexCoords() const;
+
+    // Cook state
+    bool NeedsCook() const;
+    bool HasCookedMesh() const;
+    void ReleaseCooked() const;
+};
+```
+
+---
+
+## FRealtimeMeshComplexGeometry
+
+A sparse array of named `FRealtimeMeshCollisionMesh` objects.
+
+```cpp
+struct REALTIMEMESHCOMPONENT_INTERFACE_API FRealtimeMeshComplexGeometry
+{
+    int32 NumMeshes() const;
+    void  Reset();
+
+    // Add / Insert
+    int32 Add(const FRealtimeMeshCollisionMesh& InMesh);
+    int32 Add(FRealtimeMeshCollisionMesh&& InMesh);
+    bool  Insert(int32 Index, const FRealtimeMeshCollisionMesh& InMesh);
+    bool  Insert(int32 Index, FRealtimeMeshCollisionMesh&& InMesh);
+
+    // Access
+    FRealtimeMeshCollisionMesh&       GetByIndex(int32 Index);
+    const FRealtimeMeshCollisionMesh& GetByIndex(int32 Index) const;
+    int32 GetIndexFromName(FName MeshName) const;
+    bool  GetByName(FName MeshName, FRealtimeMeshCollisionMesh& OutMesh);
+
+    // Modify
+    bool Update(int32 Index, const FRealtimeMeshCollisionMesh& InMesh);
+    bool Update(int32 Index, FRealtimeMeshCollisionMesh&& InMesh);
+
+    // Remove
+    bool Remove(int32 Index);
+    bool Remove(FName MeshName);
+
+    // Cooking utilities
+    TArray<int32> GetMeshIDsNeedingCook() const;
+};
+```
+
+---
+
+## API on URealtimeMeshSimple
+
+```cpp
+// Query
+bool HasCustomComplexMeshGeometry() const;
+
+// Set — move version (preferred for large meshes)
+TFuture<ERealtimeMeshCollisionUpdateResult> SetCustomComplexMeshGeometry(
+    FRealtimeMeshComplexGeometry&& InComplexMeshGeometry
+);
+
+// Set — copy version
+TFuture<ERealtimeMeshCollisionUpdateResult> SetCustomComplexMeshGeometry(
+    const FRealtimeMeshComplexGeometry& InComplexMeshGeometry
+);
+
+// Read-only access inside a lock
+void ProcessCustomComplexMeshGeometry(
+    TFunctionRef<void(const FRealtimeMeshComplexGeometry&)> ProcessFunc
+) const;
+
+// Mutable in-place edit
+TFuture<ERealtimeMeshCollisionUpdateResult> EditCustomComplexMeshGeometry(
+    TFunctionRef<void(FRealtimeMeshComplexGeometry&)> EditFunc
+);
+
+// Remove custom geometry (reverts to section-derived collision)
+TFuture<ERealtimeMeshCollisionUpdateResult> ClearCustomComplexMeshGeometry();
+```
+
+---
+
+## Example
+
+```cpp
+// Build a simple quad collision mesh manually
+FRealtimeMeshCollisionMesh CollisionMesh;
+CollisionMesh.Name = "FloorCollision";
+
+collisionMesh.SetVertices({
+    FVector3f(0.f,    0.f,    0.f),
+    FVector3f(100.f,  0.f,    0.f),
+    FVector3f(100.f,  100.f,  0.f),
+    FVector3f(0.f,    100.f,  0.f),
+});
+
+CollisionMesh.SetTriangles({
+    RealtimeMesh::TIndex3<int32>(0, 1, 2),
+    RealtimeMesh::TIndex3<int32>(0, 2, 3),
+});
+
+FRealtimeMeshComplexGeometry ComplexGeometry;
+ComplexGeometry.Add(MoveTemp(CollisionMesh));
+
+Mesh->SetCustomComplexMeshGeometry(MoveTemp(ComplexGeometry));
+```
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Collision Configuration" href="/api/collision-config">
+    Configure async cooking, flip normals, and deformable mesh flags.
+  </Card>
+  <Card title="Simple Geometry" href="/api/simple-geometry">
+    Primitive shapes for fast simple collision.
+  </Card>
+</CardGroup>

@@ -1,0 +1,194 @@
+---
+title: "Stream Builder"
+description: "Type-safe C++ stream builder API for constructing mesh geometry."
+---
+
+`TRealtimeMeshBuilderLocal` is a C++ template that constructs a `FRealtimeMeshStreamSet` incrementally. It provides per-vertex and per-triangle helpers and eliminates manual buffer management.
+
+---
+
+## Template Declaration
+
+```cpp
+template<
+    typename IndexType,    // uint16 or uint32
+    typename TangentType,  // FPackedNormal, FPackedRGBA16N, FVector4f, or void
+    typename TexCoordType, // FVector2DHalf, FVector2f, or void
+    int32   NumTexCoords,  // 1–4
+    typename ColorType     // FColor, FLinearColor, or void
+>
+struct TRealtimeMeshBuilderLocal;
+```
+
+### Template Parameter Options
+
+| Parameter | Options | Notes |
+|---|---|---|
+| `IndexType` | `uint16`, `uint32` | `uint16` caps at 65 535 vertices; `uint32` is unlimited. |
+| `TangentType` | `FPackedNormal`, `FPackedRGBA16N`, `FVector4f`, `void` | `void` omits the tangent stream. |
+| `TexCoordType` | `FVector2DHalf`, `FVector2f`, `void` | `void` omits the UV stream. |
+| `NumTexCoords` | `1`–`4` | Number of UV channels. |
+| `ColorType` | `FColor`, `FLinearColor`, `void` | `void` omits the color stream. |
+
+A `void` type parameter skips that stream entirely — the corresponding `Enable*` / setter methods are not generated.
+
+---
+
+## Typedef Aliases
+
+```cpp
+// Normal precision (most common)
+using FRealtimeMeshLocalBuilder = TRealtimeMeshBuilderLocal<
+    uint16,           // 16-bit indices
+    FPackedNormal,    // 8-bit tangents
+    FVector2DHalf,    // 16-bit UVs
+    1,                // 1 UV channel
+    void              // no vertex color
+>;
+
+// High precision
+using FRealtimeMeshLocalBuilderHP = TRealtimeMeshBuilderLocal<
+    uint32,
+    FPackedRGBA16N,
+    FVector2f,
+    2,
+    FColor
+>;
+```
+
+---
+
+## Construction
+
+```cpp
+// Construct with existing streams (for in-place editing)
+explicit TRealtimeMeshBuilderLocal(
+    FRealtimeMeshStreamSet& InExistingStreams,
+    bool bKeepExistingData = true
+);
+
+// Construct fresh, building an internal stream set
+TRealtimeMeshBuilderLocal();
+```
+
+---
+
+## Enable / Disable Streams
+
+Call these **before** adding any vertices or triangles:
+
+```cpp
+void EnableTangents(bool bUseHighPrecision = false);
+void DisableTangents();
+
+void EnableTexCoords(int32 NumChannels = 1, bool bUseHighPrecision = false);
+void DisableTexCoords();
+
+void EnableColors();
+void DisableColors();
+
+void EnablePolyGroups(bool bUse32BitIndices = false);
+void DisablePolyGroups();
+
+void EnableDepthOnlyTriangles(bool bUse32BitIndices = false);
+void DisableDepthOnlyTriangles();
+```
+
+---
+
+## Adding Vertices
+
+```cpp
+auto AddVertex(FVector3f Position) -> VertexBuilder;
+```
+
+Adds a vertex at the given position and returns a lightweight **vertex builder handle** scoped to that vertex index. Chain setters on the handle to configure all attributes.
+
+### Vertex Builder Handle Methods
+
+```cpp
+VertexBuilder& SetNormalAndTangent(
+    FVector3f Normal,
+    FVector3f Tangent,
+    bool bShouldFlipBinormal = false
+);
+
+VertexBuilder& SetTexCoord(FVector2f TexCoord);           // channel 0
+VertexBuilder& SetTexCoord(int32 Channel, FVector2f UV);  // explicit channel
+
+VertexBuilder& SetColor(FColor Color);
+VertexBuilder& SetPolyGroup(int32 PolyGroup);
+```
+
+---
+
+## Adding Triangles
+
+```cpp
+void AddTriangle(IndexType V0, IndexType V1, IndexType V2);
+void AddTriangle(IndexType V0, IndexType V1, IndexType V2, int32 PolyGroup);
+```
+
+<Warning>
+  When using `uint16` indices, vertex indices must be in the range `[0, 65535]`. Building geometry that exceeds this limit requires switching to `uint32` indices.
+</Warning>
+
+---
+
+## Retrieving the Stream Set
+
+```cpp
+// Move the stream set out (builder becomes invalid after this)
+FRealtimeMeshStreamSet&& TakeStreamSet();
+
+// Get a const reference without moving
+const FRealtimeMeshStreamSet& GetStreamSet() const;
+```
+
+---
+
+## Full Example
+
+```cpp
+#include "Core/RealtimeMeshBuilder.h"
+
+void UMyActor::BuildTriangle(URealtimeMeshSimple* Mesh)
+{
+    using namespace RealtimeMesh;
+
+    TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 1, void> Builder;
+
+    int32 V0 = Builder.AddVertex(FVector3f(0.f,   0.f,   0.f))
+        .SetNormalAndTangent(FVector3f::UpVector, FVector3f::ForwardVector)
+        .SetTexCoord(FVector2f(0.f, 0.f));
+
+    int32 V1 = Builder.AddVertex(FVector3f(100.f, 0.f,   0.f))
+        .SetNormalAndTangent(FVector3f::UpVector, FVector3f::ForwardVector)
+        .SetTexCoord(FVector2f(1.f, 0.f));
+
+    int32 V2 = Builder.AddVertex(FVector3f(0.f,   100.f, 0.f))
+        .SetNormalAndTangent(FVector3f::UpVector, FVector3f::ForwardVector)
+        .SetTexCoord(FVector2f(0.f, 1.f));
+
+    Builder.AddTriangle(V0, V1, V2);
+
+    auto SectionGroupKey = FRealtimeMeshSectionGroupKey::Create(
+        FRealtimeMeshLODKey(0), FName("MyGroup")
+    );
+
+    Mesh->CreateSectionGroup(SectionGroupKey, Builder.TakeStreamSet());
+}
+```
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Data Streams" href="/api/data-streams">
+    The FRealtimeMeshStreamSet and FRealtimeMeshStream types the builder produces.
+  </Card>
+  <Card title="Stream Type Reference" href="/api/stream-types">
+    Tangent and UV type trade-offs.
+  </Card>
+</CardGroup>

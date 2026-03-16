@@ -1,0 +1,113 @@
+---
+title: "FRealtimeMeshCollisionConfiguration"
+description: "Configuration struct for controlling collision behavior of realtime meshes."
+---
+
+`FRealtimeMeshCollisionConfiguration` is a plain struct (no UCLASS) that controls how the Chaos physics engine builds and uses the collision body for a `URealtimeMeshSimple`.
+
+Set it via `URealtimeMeshSimple::SetCollisionConfig()` and retrieve it via `GetCollisionConfig()`.
+
+---
+
+## Fields
+
+<ResponseField name="bUseComplexAsSimpleCollision" type="bool">
+  When `true`, the complex (triangle mesh) collision is also used for simple overlap and sweep queries. This avoids the need to define explicit simple shapes but is more expensive. Default: `true`.
+</ResponseField>
+
+<ResponseField name="bUseAsyncCook" type="bool">
+  When `true`, physics cooking runs on a background thread. The collision body is applied when cooking completes, which may be one or more frames after the mesh update. Set to `false` to force synchronous cooking. Default: `true`.
+</ResponseField>
+
+<ResponseField name="bShouldFastCookMeshes" type="bool">
+  When `true`, enables fast cooking mode which skips some validation steps for faster mesh cooking at the cost of reduced robustness. Use only for meshes you control entirely. Default: `false`.
+</ResponseField>
+
+<ResponseField name="bFlipNormals" type="bool">
+  When `true`, triangle winding is reversed before cooking so that the collision normals point inward. Useful for inverted-geometry volumes (e.g., hollow interiors). Default: `false`.
+</ResponseField>
+
+<ResponseField name="bDeformableMesh" type="bool">
+  Marks the mesh as deformable for Chaos. Enables per-frame collision body updates without full recreation. Set this when using the mesh for cloth, soft bodies, or similar deformation. Default: `false`.
+</ResponseField>
+
+<ResponseField name="bMergeAllMeshes" type="bool">
+  When `true`, all collision meshes from all section groups are merged into a single `UBodySetup` body rather than one per group. Can reduce collision overhead when many small groups are used. Default: `false`.
+</ResponseField>
+
+---
+
+## Usage
+
+```cpp
+FRealtimeMeshCollisionConfiguration Config;
+Config.bUseComplexAsSimpleCollision = true;
+Config.bUseAsyncCook                = true;
+Config.bFlipNormals                 = false;
+
+Mesh->SetCollisionConfig(Config);
+```
+
+In Blueprint, use the **Set Collision Config** node on a `URealtimeMeshSimple` reference and pass a completion delegate to receive notification when cooking finishes.
+
+---
+
+## ERealtimeMeshCollisionUpdateResult
+
+Returned (via future or delegate) after any collision update operation.
+
+```cpp
+enum class ERealtimeMeshCollisionUpdateResult : uint8
+{
+    Unknown, // Unexpected state — should not occur in normal use.
+    Updated, // Collision body was successfully rebuilt and applied.
+    Ignored, // Update was requested but was a no-op (e.g., no changes).
+    Error,   // Cooking failed. Check the output log for details.
+};
+```
+
+---
+
+## Async vs Synchronous Cooking
+
+<Tabs>
+  <Tab title="Async (default)">
+    ```cpp
+    Config.bUseAsyncCook = true;
+    Mesh->SetCollisionConfig(Config, FRealtimeMeshSimpleCollisionCompletionCallback::CreateLambda(
+        [](ERealtimeMeshCollisionUpdateResult Result)
+        {
+            if (Result == ERealtimeMeshCollisionUpdateResult::Updated)
+            {
+                UE_LOG(LogTemp, Log, TEXT("Collision updated asynchronously."));
+            }
+        }
+    ));
+    ```
+  </Tab>
+  <Tab title="Synchronous">
+    ```cpp
+    Config.bUseAsyncCook = false;
+    // The future blocks until cooking completes
+    auto Future = Mesh->SetCollisionConfig(Config);
+    // Future.Get() == ERealtimeMeshCollisionUpdateResult::Updated
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Synchronous cooking blocks the game thread. Use asynchronous cooking in production to avoid hitches.
+</Note>
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Simple Geometry" href="/api/simple-geometry">
+    Primitive collision shapes (spheres, boxes, capsules, convex hulls).
+  </Card>
+  <Card title="Complex Geometry" href="/api/complex-geometry">
+    Per-triangle complex collision geometry.
+  </Card>
+</CardGroup>

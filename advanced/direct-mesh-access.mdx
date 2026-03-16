@@ -1,0 +1,283 @@
+---
+title: "Direct Mesh Access"
+description: "Read or modify mesh stream data in place using ProcessMesh and EditMeshInPlace, avoiding the overhead of full stream replacement."
+---
+
+After a section group has been created, RMC retains a CPU-side copy of every stream inside `FRealtimeMeshSectionGroupSimple`. The direct access API gives you a lock-protected view into that data so you can read it back or make surgical edits without uploading the entire stream set to the GPU again.
+
+<Note>
+Direct access is available on `URealtimeMeshSimple` and its underlying `FRealtimeMeshSectionGroupSimple`. It is not available on custom mesh implementations that do not store CPU-side stream data.
+</Note>
+
+---
+
+## ProcessMesh — read-only access
+
+`ProcessMesh` acquires the mesh read lock, then calls your function with a `const FRealtimeMeshStreamSet&`. The lock is held for the duration of the lambda.
+
+```cpp
+// Signature on URealtimeMeshSimple
+void ProcessMesh(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    const TFunctionRef<void(const FRealtimeMeshStreamSet&)>& ProcessFunc) const;
+```
+
+```cpp
+// Signature on FRealtimeMeshSectionGroupSimple
+void ProcessMeshData(
+    const FRealtimeMeshLockContext& LockContext,
+    TFunctionRef<void(const FRealtimeMeshStreamSet&)> ProcessFunc) const;
+```
+
+### Reading vertex positions back
+
+```cpp
+#include "RealtimeMeshSimple.h"
+using namespace RealtimeMesh;
+
+void ReadPositions(URealtimeMeshSimple* Mesh,
+                   const FRealtimeMeshSectionGroupKey& GroupKey,
+                   TArray<FVector3f>& OutPositions)
+{
+    Mesh->ProcessMesh(GroupKey, [&](const FRealtimeMeshStreamSet& Streams)
+    {
+        const FRealtimeMeshStream* PosStream = Streams.Find(FRealtimeMeshStreams::Position);
+        if (!PosStream)
+        {
+            return;
+        }
+
+        // Wrap the const stream in a read-only builder
+        TRealtimeMeshStreamBuilder<const FVector3f> PosBuilder(*PosStream);
+
+        OutPositions.Reserve(PosBuilder.Num());
+        for (int32 i = 0; i < PosBuilder.Num(); ++i)
+        {
+            OutPositions.Add(PosBuilder.GetValue(i));
+        }
+    });
+}
+```
+
+<Warning>
+Do not store a pointer or reference to any stream data obtained inside the lambda. The lock is released when the lambda returns, after which the data may be modified or freed on another thread.
+</Warning>
+
+---
+
+## EditMeshInPlace — in-place modification
+
+`EditMeshInPlace` acquires the write lock, calls your function with a mutable `FRealtimeMeshStreamSet&`, and then updates only the streams whose keys you return from the lambda. This avoids re-uploading streams that were not touched.
+
+```cpp
+// Signature on URealtimeMeshSimple
+TFuture<ERealtimeMeshProxyUpdateStatus> EditMeshInPlace(
+    const FRealtimeMeshSectionGroupKey& SectionGroupKey,
+    const TFunctionRef<TSet<FRealtimeMeshStreamKey>(FRealtimeMeshStreamSet&)>& EditFunc);
+```
+
+```cpp
+// Signature on FRealtimeMeshSectionGroupSimple
+void EditMeshData(
+    FRealtimeMeshUpdateContext& UpdateContext,
+    TFunctionRef<TSet<FRealtimeMeshStreamKey>(FRealtimeMeshStreamSet&)> EditFunc);
+```
+
+The return value from the edit lambda is a `TSet<FRealtimeMeshStreamKey>` listing which streams were modified. RMC sends only those streams to the render thread proxy.
+
+### Translating all vertices
+
+```cpp
+TFuture<ERealtimeMeshProxyUpdateStatus> TranslateVertices(
+    URealtimeMeshSimple* Mesh,
+    const FRealtimeMeshSectionGroupKey& GroupKey,
+    FVector3f Delta)
+{
+    return Mesh->EditMeshInPlace(GroupKey,
+        [Delta](FRealtimeMeshStreamSet& Streams) -> TSet<FRealtimeMeshStreamKey>
+        {
+            FRealtimeMeshStream* PosStream = Streams.Find(FRealtimeMeshStreams::Position);
+            if (!PosStream)
+            {
+                return {}; // No streams modified
+            }
+
+            TRealtimeMeshStreamBuilder<FVector3f> PosBuilder(*PosStream);
+            for (int32 i = 0; i < PosBuilder.Num(); ++i)
+            {
+                PosBuilder.Set(i, PosBuilder.GetValue(i) + Delta);
+            }
+
+            // Tell RMC that only Position needs re-uploading
+            return { FRealtimeMeshStreams::Position };
+        });
+}
+```
+
+### Updating colors without touching geometry
+
+```cpp
+TFuture<ERealtimeMeshProxyUpdateStatus> SetAllVertexColors(
+    URealtimeMeshSimple* Mesh,
+    const FRealtimeMeshSectionGroupKey& GroupKey,
+    FColor NewColor)
+{
+    return Mesh->EditMeshInPlace(GroupKey,
+        [NewColor](FRealtimeMeshStreamSet& Streams) -> TSet<FRealtimeMeshStreamKey>
+        {
+            FRealtimeMeshStream* ColorStream = Streams.Find(FRealtimeMeshStreams::Color);
+            if (!ColorStream)
+            {
+                return {};
+            }
+
+            TRealtimeMeshStreamBuilder<FColor> ColorBuilder(*ColorStream);
+            for (int32 i = 0; i < ColorBuilder.Num(); ++i)
+            {
+                ColorBuilder.Set(i, NewColor);
+            }
+
+            return { FRealtimeMeshStreams::Color };
+        });
+}
+```
+
+---
+
+## GetStream — accessing a named stream directly
+
+`FRealtimeMeshStreamSet::Find` returns a pointer to the stream or `nullptr` if it does not exist:
+
+```cpp
+FRealtimeMeshStream* Stream = Streams.Find(FRealtimeMeshStreams::Position);  // mutable
+const FRealtimeMeshStream* Stream = Streams.Find(FRealtimeMeshStreams::Position); // const
+```
+
+On `FRealtimeMeshSectionGroupSimple` you can call `GetStream` directly with a lock context:
+
+```cpp
+const FRealtimeMeshStream* GetStream(
+    const FRealtimeMeshLockContext& LockContext,
+    FRealtimeMeshStreamKey StreamKey) const;
+```
+
+Standard stream keys are defined as static members of `FRealtimeMeshStreams`:
+
+| Key | Stream type | Description |
+|---|---|---|
+| `FRealtimeMeshStreams::Position` | Vertex | `FVector3f` per vertex |
+| `FRealtimeMeshStreams::Tangents` | Vertex | Normal + tangent pairs |
+| `FRealtimeMeshStreams::TexCoords` | Vertex | One or more UV channels per vertex |
+| `FRealtimeMeshStreams::Color` | Vertex | `FColor` per vertex |
+| `FRealtimeMeshStreams::Triangles` | Index | `TIndex3<uint16>` or `TIndex3<uint32>` |
+| `FRealtimeMeshStreams::PolyGroups` | Index | Per-triangle polygon group index |
+| `FRealtimeMeshStreams::DepthOnlyTriangles` | Index | Separate triangle list for depth-only pass |
+
+---
+
+## When to use direct access vs. full replacement
+
+<AccordionGroup>
+  <Accordion title="Use EditMeshInPlace when">
+    - Only a subset of streams changes (e.g., positions but not UVs or normals)
+    - The mesh already exists and you are making per-frame or event-driven tweaks
+    - You want to avoid the allocation cost of building a new `FRealtimeMeshStreamSet`
+    - You are reading back data immediately before writing it (for physics-driven deformation, etc.)
+  </Accordion>
+  <Accordion title="Use full replacement (UpdateSectionGroup) when">
+    - The topology changes (vertex count or index count is different)
+    - Most streams change simultaneously (the selective-upload advantage disappears)
+    - You are building the mesh for the first time
+    - You need to change the stream formats (e.g., upgrading from 16-bit to 32-bit indices)
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Thread safety
+
+<Warning>
+Both `ProcessMesh` and `EditMeshInPlace` acquire the mesh's internal read or write lock before calling your lambda. You must not call any other RMC function that tries to acquire the same lock from inside the lambda, or you will deadlock.
+
+If you need to read and then write in the same operation, use `EditMeshInPlace` exclusively — do not call `ProcessMesh` inside an `EditMeshInPlace` lambda.
+</Warning>
+
+The lock context is per-`URealtimeMesh` instance. Concurrent calls on different `URealtimeMeshSimple` objects are safe. Concurrent calls on the same object serialize against each other automatically.
+
+---
+
+## Complete example: direct access without RealtimeMeshActor
+
+This pattern is demonstrated in `RealtimeMeshDirect.cpp` — creating and owning the `URealtimeMeshComponent` directly rather than using `ARealtimeMeshActor`:
+
+```cpp
+#include "RealtimeMeshDirect.h"
+#include "RealtimeMeshSimple.h"
+#include "Engine/CollisionProfile.h"
+using namespace RealtimeMesh;
+
+ARealtimeMeshDirect::ARealtimeMeshDirect()
+{
+    RealtimeMeshComponent = CreateDefaultSubobject<URealtimeMeshComponent>(TEXT("RMC"));
+    RealtimeMeshComponent->SetMobility(EComponentMobility::Movable);
+    RealtimeMeshComponent->SetGenerateOverlapEvents(false);
+    RealtimeMeshComponent->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+    SetRootComponent(RealtimeMeshComponent);
+}
+
+void ARealtimeMeshDirect::OnConstruction(const FTransform& Transform)
+{
+    URealtimeMeshSimple* Mesh = RealtimeMeshComponent->InitializeRealtimeMesh<URealtimeMeshSimple>();
+
+    FRealtimeMeshStreamSet StreamSet;
+    TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 1> Builder(StreamSet);
+    Builder.EnableTangents();
+    Builder.EnableTexCoords();
+    Builder.EnableColors();
+    Builder.EnablePolyGroups();
+
+    int32 V0 = Builder.AddVertex(FVector3f(-50, 0, 0))
+        .SetNormalAndTangent(FVector3f(0, -1, 1), FVector3f(1, 0, 0))
+        .SetColor(FColor::Red)
+        .SetTexCoord(FVector2f(0, 0));
+
+    int32 V1 = Builder.AddVertex(FVector3f(0, 0, 100))
+        .SetNormalAndTangent(FVector3f(0, -1, 1), FVector3f(1, 0, 0))
+        .SetColor(FColor::Green)
+        .SetTexCoord(FVector2f(0.5f, 1));
+
+    int32 V2 = Builder.AddVertex(FVector3f(50, 0, 0))
+        .SetNormalAndTangent(FVector3f(0, -1, 1), FVector3f(1, 0, 0))
+        .SetColor(FColor::Blue)
+        .SetTexCoord(FVector2f(1, 0));
+
+    Builder.AddTriangle(V0, V1, V2, 0);
+    Builder.AddTriangle(V2, V1, V0, 1);
+
+    const FRealtimeMeshSectionGroupKey GroupKey =
+        FRealtimeMeshSectionGroupKey::Create(0, FName("Triangle"));
+
+    Mesh->CreateSectionGroup(GroupKey, StreamSet,
+        FRealtimeMeshSectionGroupConfig(ERealtimeMeshSectionDrawType::Static));
+
+    Mesh->UpdateSectionConfig(
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 0), FRealtimeMeshSectionConfig(0));
+    Mesh->UpdateSectionConfig(
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 1), FRealtimeMeshSectionConfig(1));
+
+    // Later: edit positions in place
+    Mesh->EditMeshInPlace(GroupKey, [](FRealtimeMeshStreamSet& S) -> TSet<FRealtimeMeshStreamKey>
+    {
+        FRealtimeMeshStream* Pos = S.Find(FRealtimeMeshStreams::Position);
+        if (Pos)
+        {
+            TRealtimeMeshStreamBuilder<FVector3f> B(*Pos);
+            for (int32 i = 0; i < B.Num(); ++i)
+            {
+                B.Set(i, B.GetValue(i) + FVector3f(0, 0, 10));
+            }
+        }
+        return { FRealtimeMeshStreams::Position };
+    });
+}
+```

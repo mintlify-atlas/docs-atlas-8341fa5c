@@ -1,0 +1,189 @@
+---
+title: "Multiple UV Channels"
+description: "Store multiple UV coordinate sets per vertex using TRealtimeMeshBuilderLocal with more than one texture coordinate channel."
+---
+
+RMC supports up to four UV channels per vertex. Additional channels are typically used for:
+
+- **Lightmap UVs** — a non-overlapping UV layout in channel 1 for baked lighting
+- **Detail textures** — a high-frequency tiled UV in channel 1 blended with a coarse UV in channel 0
+- **Terrain blending** — per-vertex control UVs that drive material blending parameters
+- **Trim sheets** — a second UV set that references a different atlas region
+
+## How UV channels are stored
+
+UV data lives in the `FRealtimeMeshStreams::TexCoords` stream. The number of channels is determined by the fourth template parameter of `TRealtimeMeshBuilderLocal`.
+
+The precision is set by the third template parameter:
+
+| Template type | C++ type | Size per channel | Precision |
+|---------------|----------|------------------|-----------|
+| `FVector2DHalf` | 16-bit float×2 | 4 bytes | Sufficient for most gameplay UVs |
+| `FVector2f` | 32-bit float×2 | 8 bytes | Full precision, use for lightmaps or tight UV spaces |
+
+The `ERealtimeMeshSimpleStreamConfig` enum used in the Blueprint API maps directly to these:
+
+| Enum value | Underlying type |
+|------------|-----------------|
+| `Normal` | `FVector2DHalf` |
+| `HighPrecision` | `FVector2f` |
+
+## Enabling multiple UV channels in C++
+
+Change the fourth template argument from `1` to the number of channels you need (1–4):
+
+```cpp
+// One UV channel (basic)
+TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 1> Builder(StreamSet);
+
+// Two UV channels
+TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 2> Builder(StreamSet);
+```
+
+Then call `EnableTexCoords()` as usual — no additional configuration is required:
+
+```cpp
+Builder.EnableTangents();
+Builder.EnableTexCoords();   // creates the TexCoords stream with NumTexCoords channels
+Builder.EnableColors();
+Builder.EnablePolyGroups();
+```
+
+## Setting UV data per vertex
+
+Use the overloaded `SetTexCoord` method. Channel 0 is the default; pass the channel index as the first argument for any additional channel:
+
+```cpp
+// Channel 0 is written with the single-argument overload
+int32 V0 = Builder.AddVertex(FVector3f(-50.0f, 0.0f, 0.0f))
+    .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 1.0f), FVector3f(1.0f, 0.0f, 0.0f))
+    .SetColor(FColor::Red)
+    .SetTexCoord(FVector2f(0.0f, 0.0f))       // channel 0
+    .SetTexCoord(1, FVector2f(0.25f, 0.25f)); // channel 1
+
+int32 V1 = Builder.AddVertex(FVector3f(0.0f, 0.0f, 100.0f))
+    .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 1.0f), FVector3f(1.0f, 0.0f, 0.0f))
+    .SetColor(FColor::Green)
+    .SetTexCoord(FVector2f(0.5f, 1.0f))
+    .SetTexCoord(1, FVector2f(0.5f, 0.75f));
+
+int32 V2 = Builder.AddVertex(FVector3f(50.0f, 0.0f, 0.0f))
+    .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 1.0f), FVector3f(1.0f, 0.0f, 0.0f))
+    .SetColor(FColor::Blue)
+    .SetTexCoord(FVector2f(1.0f, 0.0f))
+    .SetTexCoord(1, FVector2f(0.75f, 0.25f));
+```
+
+## Complete example (from RealtimeMeshMultipleUVs)
+
+This is the full implementation from the `ARealtimeMeshMultipleUVs` example actor:
+
+```cpp
+void ARealtimeMeshMultipleUVs::OnConstruction(const FTransform& Transform)
+{
+    Super::OnConstruction(Transform);
+
+    URealtimeMeshSimple* RealtimeMesh =
+        GetRealtimeMeshComponent()->InitializeRealtimeMesh<URealtimeMeshSimple>();
+
+    FRealtimeMeshStreamSet StreamSet;
+
+    // Two UV channels — note the '2' in the template argument list
+    TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 2> Builder(StreamSet);
+
+    Builder.EnableTangents();
+    Builder.EnableTexCoords();
+    Builder.EnableColors();
+    Builder.EnablePolyGroups();
+
+    int32 V0 = Builder.AddVertex(FVector3f(-50.0f, 0.0f, 0.0f))
+        .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 1.0f), FVector3f(1.0f, 0.0f, 0.0f))
+        .SetColor(FColor::Red)
+        .SetTexCoord(FVector2f(0.0f, 0.0f))
+        .SetTexCoord(1, FVector2f(0.25f, 0.25f));
+
+    int32 V1 = Builder.AddVertex(FVector3f(0.0f, 0.0f, 100.0f))
+        .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 1.0f), FVector3f(1.0f, 0.0f, 0.0f))
+        .SetColor(FColor::Green)
+        .SetTexCoord(FVector2f(0.5f, 1.0f))
+        .SetTexCoord(1, FVector2f(0.5f, 0.75f));
+
+    int32 V2 = Builder.AddVertex(FVector3f(50.0f, 0.0f, 0.0f))
+        .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 1.0f), FVector3f(1.0f, 0.0f, 0.0f))
+        .SetColor(FColor::Blue)
+        .SetTexCoord(FVector2f(1.0f, 0.0f))
+        .SetTexCoord(1, FVector2f(0.75f, 0.25f));
+
+    Builder.AddTriangle(V0, V1, V2, 0);
+    Builder.AddTriangle(V2, V1, V0, 1);
+
+    RealtimeMesh->SetupMaterialSlot(0, "PrimaryMaterial");
+    RealtimeMesh->SetupMaterialSlot(1, "SecondaryMaterial");
+
+    const FRealtimeMeshSectionGroupKey GroupKey =
+        FRealtimeMeshSectionGroupKey::Create(0, FName("TestTriangle"));
+    const FRealtimeMeshSectionKey PolyGroup0SectionKey =
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 0);
+    const FRealtimeMeshSectionKey PolyGroup1SectionKey =
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 1);
+
+    // Pass ERealtimeMeshSectionDrawType::Static to hint that this data won't change
+    RealtimeMesh->CreateSectionGroup(GroupKey, StreamSet, ERealtimeMeshSectionDrawType::Static);
+
+    RealtimeMesh->UpdateSectionConfig(PolyGroup0SectionKey, FRealtimeMeshSectionConfig(0));
+    RealtimeMesh->UpdateSectionConfig(PolyGroup1SectionKey, FRealtimeMeshSectionConfig(1));
+}
+```
+
+## Blueprint: multiple UV channels
+
+In Blueprint, set `WantedTexCoordChannels` on `MakeMeshBuilder` to the number of channels you need (1–4). Then populate `UV0` through `UV3` on `FRealtimeMeshBasicVertex`:
+
+```
+Builder = MakeMeshBuilder(
+    WantedTangents       = Normal,
+    WantedTexCoords      = Normal,
+    bWants32BitIndices   = false,
+    WantedPolyGroupType  = Normal,
+    bWantsColors         = true,
+    WantedTexCoordChannels = 2      // ← two UV channels
+)
+
+Vertex.UV0 = (0.0, 0.0)
+Vertex.UV1 = (0.25, 0.25)
+V0 = Builder → AddVertex(Vertex)
+```
+
+<Tip>
+`FRealtimeMeshBasicVertex` supports up to four UV channels (`UV0`–`UV3`). Channels beyond `WantedTexCoordChannels` are silently ignored.
+</Tip>
+
+## Accessing UV channels in Unreal materials
+
+In the Material Editor, use the **Texture Coordinate** node and set the **Coordinate Index** to the channel number (0 = UV0, 1 = UV1, etc.). All channels stored in the RMC stream are visible to the material system just as they are for Static Mesh UVs.
+
+## Memory cost
+
+Each UV channel adds memory proportional to the vertex count:
+
+| Precision | Cost per vertex per channel |
+|-----------|-----------------------------|
+| `FVector2DHalf` (`Normal`) | 4 bytes |
+| `FVector2f` (`HighPrecision`) | 8 bytes |
+
+For a mesh with 10 000 vertices and two `Normal`-precision UV channels, the UV streams consume 80 KB (2 channels × 10 000 vertices × 4 bytes).
+
+<Warning>
+Do not allocate more UV channels than your materials actually use. Unused channels waste GPU bandwidth and memory bandwidth on every draw call.
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Creating a Basic Mesh" icon="cube" href="/guides/basic-mesh">
+    Start with a single UV channel before adding more.
+  </Card>
+  <Card title="LOD Example" icon="chart-line" href="/guides/lod-example">
+    Combine multiple UV channels with discrete LOD levels.
+  </Card>
+</CardGroup>

@@ -1,0 +1,195 @@
+---
+title: "Data Streams"
+description: "Reference for FRealtimeMeshStreamSet, FRealtimeMeshStream, and related types."
+---
+
+Mesh geometry in the RMC is stored in typed buffers called **streams**. A `FRealtimeMeshStreamSet` is a collection of named streams. Streams are identified by `FRealtimeMeshStreamKey` (type + name).
+
+---
+
+## ERealtimeMeshStreamType
+
+Distinguishes between vertex-rate and index-rate buffers.
+
+| Value | Description |
+|---|---|
+| `Vertex` | One entry per vertex (positions, normals, UVs, colors). |
+| `Index` | One entry per index (triangles, depth-only triangles, polygon groups). |
+| `Unknown` | Invalid/uninitialized. |
+
+---
+
+## FRealtimeMeshStreamKey
+
+```cpp
+struct FRealtimeMeshStreamKey
+{
+    FRealtimeMeshStreamKey(ERealtimeMeshStreamType InStreamType, FName InStreamName);
+
+    ERealtimeMeshStreamType GetStreamType() const;
+    FName GetName() const;
+};
+```
+
+Identifies a stream by its type and name. Used as the key in `FRealtimeMeshStreamSet`.
+
+---
+
+## Standard Stream Names
+
+The `RealtimeMesh::FRealtimeMeshStreams` namespace provides pre-built `FRealtimeMeshStreamKey` constants for all built-in streams:
+
+| Constant | Type | Name | Use |
+|---|---|---|---|
+| `FRealtimeMeshStreams::Position` | Vertex | `"Position"` | `FVector3f` positions |
+| `FRealtimeMeshStreams::Tangents` | Vertex | `"Tangents"` | Normal + tangent pairs |
+| `FRealtimeMeshStreams::TexCoords` | Vertex | `"TexCoords"` | UV channels |
+| `FRealtimeMeshStreams::Color` | Vertex | `"Color"` | Per-vertex color |
+| `FRealtimeMeshStreams::Triangles` | Index | `"Triangles"` | Main triangle list |
+| `FRealtimeMeshStreams::DepthOnlyTriangles` | Index | `"DepthOnlyTriangles"` | Simplified depth pass |
+| `FRealtimeMeshStreams::ReversedTriangles` | Index | `"ReversedTriangles"` | Back-face rendering |
+| `FRealtimeMeshStreams::PolyGroups` | Index | `"PolyGroups"` | Polygon group indices |
+| `FRealtimeMeshStreams::DepthOnlyPolyGroups` | Index | `"DepthOnlyPolyGroups"` | Depth-only poly groups |
+| `FRealtimeMeshStreams::PolyGroupSegments` | Index | `"PolyGroupSegments"` | Polygon group segment data |
+
+---
+
+## ERealtimeMeshCommonStream
+
+Blueprint-accessible enum for referencing common streams.
+
+```cpp
+UENUM()
+enum class ERealtimeMeshCommonStream : uint8
+{
+    Unknown,
+    Position,
+    Tangents,
+    TexCoords,
+    Colors,
+    Triangles,
+    DepthOnlyTriangles,
+    PolyGroups,
+    DepthOnlyPolyGroups
+};
+```
+
+Use `GetCommonStreamKey(ERealtimeMeshCommonStream)` from `URealtimeMeshBlueprintFunctionLibrary` to convert to a `FRealtimeMeshStreamKey`.
+
+---
+
+## FRealtimeMeshStreamRange
+
+```cpp
+struct FRealtimeMeshStreamRange
+{
+    // Vertex slice: [VerticesLowerInclusive, VerticesUpperExclusive)
+    // Index slice:  [IndicesLowerInclusive, IndicesUpperExclusive)
+};
+```
+
+Defines the sub-range of a stream set that a `Section` renders. Created via `URealtimeMeshBlueprintFunctionLibrary::MakeStreamRange()`.
+
+---
+
+## FRealtimeMeshStream
+
+```cpp
+struct REALTIMEMESHCOMPONENT_INTERFACE_API FRealtimeMeshStream : FResourceArrayInterface
+{
+    // Construction
+    static FRealtimeMeshStream Create(const FRealtimeMeshStreamKey& InStreamKey, const FRealtimeMeshBufferLayout& Layout);
+    template<typename StreamType>
+    static FRealtimeMeshStream Create(const FRealtimeMeshStreamKey& InStreamKey);
+
+    // Identity
+    FName GetName() const;
+    ERealtimeMeshStreamType GetStreamType() const;
+    const FRealtimeMeshStreamKey& GetStreamKey() const;
+    const FRealtimeMeshBufferLayout& GetLayout() const;
+
+    // Sizing
+    int32 Num() const;
+    int32 GetStride() const;        // bytes per row
+    int32 GetElementStride() const; // bytes per element
+    int32 GetNumElements() const;   // elements per row
+    bool IsEmpty() const;
+
+    // Mutation
+    SizeType AddUninitialized(SizeType Count = 1);
+    SizeType AddZeroed(SizeType Count = 1);
+    void Reserve(SizeType Number);
+    void SetNumUninitialized(SizeType NewNum, bool bAllowShrinking = true);
+    void SetNumZeroed(int32 NewNum, bool bAllowShrinking = true);
+    void RemoveAt(SizeType Index, SizeType Count = 1, bool bAllowShrinking = true);
+    void Empty(SizeType ExpectedUseSize = 0, SizeType MaxSlack = 0);
+    void Shrink();
+
+    // Typed access
+    template<typename VertexType> void Add(const VertexType& InVertex);
+    template<typename SourceType> void Append(TArrayView<SourceType> NewElements);
+    template<typename VertexType> void SetRange(int32 StartIndex, TArrayView<VertexType> NewElements);
+    template<typename VertexType> TArrayView<VertexType> GetArrayView();
+    template<typename VertexType> TConstArrayView<const VertexType> GetArrayView() const;
+
+    // Conversion
+    bool CanConvertTo(const FRealtimeMeshBufferLayout& NewLayout) const;
+    bool ConvertTo(const FRealtimeMeshBufferLayout& NewLayout);
+};
+```
+
+`FRealtimeMeshStream` is a strongly-typed, resizable buffer. It stores a `FRealtimeMeshBufferLayout` that describes the format of each row. Type conversions (e.g., float → half-float) are performed automatically during `Add` / `Append` when the access type differs from the storage type.
+
+---
+
+## FRealtimeMeshStreamSet
+
+```cpp
+struct REALTIMEMESHCOMPONENT_INTERFACE_API FRealtimeMeshStreamSet
+{
+    // Capacity
+    int32 Num() const;
+    bool IsEmpty() const;
+    void Empty();
+
+    // Stream management
+    FRealtimeMeshStream& AddStream(const FRealtimeMeshStreamKey& StreamKey, const FRealtimeMeshBufferLayout& InLayout);
+    template<typename StreamLayout>
+    FRealtimeMeshStream& AddStream(const FRealtimeMeshStreamKey& StreamKey);
+    FRealtimeMeshStream& AddStream(FRealtimeMeshStream&& Stream);
+
+    int32 Remove(const FRealtimeMeshStreamKey& StreamKey);
+    int32 RemoveAll(const TSet<FRealtimeMeshStreamKey>& StreamKeys);
+
+    FRealtimeMeshStream* Find(const FRealtimeMeshStreamKey& StreamKey);
+    const FRealtimeMeshStream* Find(const FRealtimeMeshStreamKey& StreamKey) const;
+    FRealtimeMeshStream& FindChecked(const FRealtimeMeshStreamKey& StreamKey);
+    FRealtimeMeshStream& FindOrAdd(const FRealtimeMeshStreamKey& StreamKey, const FRealtimeMeshBufferLayout& NewLayout, bool bKeepData = true);
+    bool Contains(const FRealtimeMeshStreamKey& StreamKey) const;
+
+    TSet<FRealtimeMeshStreamKey> GetStreamKeys() const;
+    TSet<FRealtimeMeshStreamKey> FindDifference(const FRealtimeMeshStreamSet& Other) const;
+
+    void ForEach(const TFunctionRef<void(FRealtimeMeshStream&)>& Func);
+    void ForEach(const TFunctionRef<void(const FRealtimeMeshStream&)>& Func) const;
+};
+```
+
+`FRealtimeMeshStreamSet` is the primary data container passed to `CreateSectionGroup` and `UpdateSectionGroup`. It owns its streams and does not allow implicit copying — use `CopyFrom` or move semantics.
+
+<Warning>
+  `FRealtimeMeshStreamSet` does not allow implicit copy assignment (`operator=` is deleted). Use `CopyFrom(Other)` or move assignment `= MoveTemp(Other)` to transfer data.
+</Warning>
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="Stream Builder" href="/api/stream-builder">
+    Type-safe C++ builder API that produces FRealtimeMeshStreamSet.
+  </Card>
+  <Card title="Stream Type Reference" href="/api/stream-types">
+    Tangent, UV, and index buffer type options with memory costs.
+  </Card>
+</CardGroup>

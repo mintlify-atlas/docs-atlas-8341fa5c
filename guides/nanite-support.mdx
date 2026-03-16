@@ -1,0 +1,154 @@
+---
+title: "Nanite Support"
+description: "Supply pre-built Nanite resources to URealtimeMeshSimple to enable UE5's virtualized geometry pipeline for procedural meshes."
+---
+
+Nanite is Unreal Engine 5's virtualized geometry system. It streams and renders an extremely high triangle count without discrete LOD transitions by automatically selecting the right level of detail at the cluster level on the GPU. RMC can use Nanite in place of its traditional LOD pipeline.
+
+## When to use Nanite with RMC
+
+Nanite is well-suited for:
+
+- **High-polycount static geometry** — rocky terrain, rubble piles, architectural details
+- **Meshes that change infrequently** — generated once at load time, then static
+- **Scenes with many unique mesh variants** — Nanite amortises the per-mesh overhead
+
+Nanite is **not** well-suited for:
+
+- Meshes updated every frame (terrain deformation, cloth, fluids)
+- Translucent or masked materials (Nanite requires opaque materials)
+- Meshes needing custom depth-only passes or custom stencil
+
+<Note>
+Nanite requires Unreal Engine 5.0 or later and hardware that supports DirectX 12 / Vulkan with Shader Model 6. Consult Epic's Nanite documentation for a full hardware compatibility matrix.
+</Note>
+
+## The FRealtimeMeshNaniteResources type
+
+Nanite resources in RMC are wrapped in `FRealtimeMeshNaniteResources`, declared in `Mesh/RealtimeMeshNaniteResourcesInterface.h`. It inherits from `Nanite::FResources` and adds lifecycle management so resources are always released on the render thread.
+
+```cpp
+// The resources are heap-allocated and managed through a unique pointer with
+// a custom deleter that queues render-thread cleanup.
+using FRealtimeMeshNaniteResourcesPtr =
+    TUniquePtr<FRealtimeMeshNaniteResources, FRealtimeMeshNaniteResourcesDeleter>;
+```
+
+### Creating resources
+
+You obtain a `Nanite::FResources` object from Epic's Nanite builder API (for example `UE::Nanite::FMeshBuilder`), then wrap it:
+
+```cpp
+// InResources   — fully built Nanite::FResources from the Nanite builder
+// InBounds      — tight bounding box for the mesh
+FRealtimeMeshNaniteResourcesPtr NaniteResources =
+    FRealtimeMeshNaniteResources::Create(MoveTemp(InResources), InBounds);
+```
+
+If you already have a `const Nanite::FResources&` and cannot move it, use `CreateFromCopy`:
+
+```cpp
+FRealtimeMeshNaniteResourcesPtr NaniteResources =
+    FRealtimeMeshNaniteResources::CreateFromCopy(ConstResources, InBounds);
+```
+
+## Attaching Nanite resources to URealtimeMeshSimple
+
+`URealtimeMeshSimple` stores the Nanite resources through the lower-level `FRealtimeMeshSimple` data object. Call `SetNaniteResources` inside an update context:
+
+```cpp
+// Access the underlying FRealtimeMeshSimple
+TSharedRef<RealtimeMesh::FRealtimeMeshSimple> MeshData = RealtimeMesh->GetMeshData();
+
+// Acquire an update context and set resources
+RealtimeMesh::FRealtimeMeshUpdateContext UpdateContext(MeshData);
+MeshData->SetNaniteResources(UpdateContext, MoveTemp(NaniteResources));
+```
+
+<Warning>
+`SetNaniteResources` takes ownership of the pointer via move semantics. After the call `NaniteResources` is null. Do not attempt to access it.
+</Warning>
+
+### Removing Nanite resources
+
+To revert to standard LOD rendering, clear the Nanite resources:
+
+```cpp
+RealtimeMesh::FRealtimeMeshUpdateContext UpdateContext(MeshData);
+MeshData->ClearNaniteResources(UpdateContext);
+```
+
+### Checking whether resources are loaded
+
+```cpp
+bool bHasNanite = MeshData->HasNaniteResources(LockContext);
+```
+
+## Nanite vs traditional LOD pipeline
+
+| Feature | Traditional LODs | Nanite |
+|---------|-----------------|--------|
+| Triangle budget | Fixed per LOD | Virtually unlimited |
+| LOD transitions | Discrete (pop) | Seamless |
+| Setup cost | Low | High (offline build step) |
+| Runtime update cost | Low | High (Nanite resources are large) |
+| Translucent materials | Supported | Not supported |
+| Mobile / low-end GPU | Supported | Not supported |
+| Collision | From LOD 0 sections | From LOD 0 sections (unchanged) |
+
+<Note>
+When Nanite resources are present, the traditional LOD sections are still stored on the mesh but the render path switches entirely to Nanite's cluster pipeline. The `UpdateSectionConfig` calls and `FRealtimeMeshSectionGroupKey` structure remain valid for collision and other non-render purposes.
+</Note>
+
+## Validity check and initialization
+
+Before a `FRealtimeMeshNaniteResources` can be used by the renderer, it must be initialized on the render thread. The RMC handles this automatically when you call `SetNaniteResources` inside an update context — the proxy update queues `InitResources` to the render thread.
+
+You can check whether the resources contain valid data before setting them:
+
+```cpp
+if (NaniteResources->HasValidData())
+{
+    // RootData is non-empty — safe to set
+    MeshData->SetNaniteResources(UpdateContext, MoveTemp(NaniteResources));
+}
+else
+{
+    UE_LOG(LogTemp, Warning, TEXT("Nanite build produced empty resources."));
+}
+```
+
+## Material requirements
+
+Nanite requires **opaque** materials. Using a translucent or masked material on a Nanite mesh causes the mesh to fall back to non-Nanite rendering automatically. Ensure all material slots assigned to the sections use an `Opaque` blend mode.
+
+## Override materials on the component
+
+If you need to override the materials returned by the Nanite pipeline, override `UseNaniteOverrideMaterials()` in a `URealtimeMeshComponent` subclass:
+
+```cpp
+class UMyRealtimeMeshComponent : public URealtimeMeshComponent
+{
+    // Return true to supply per-instance material overrides to the Nanite renderer.
+    // The default implementation returns false.
+    virtual bool UseNaniteOverrideMaterials() const override { return true; }
+};
+```
+
+## Important caveats
+
+- **Nanite disables traditional LOD rendering.** Once Nanite resources are set, the engine ignores the LOD sections for rendering. They are retained for collision.
+- **Build offline when possible.** Nanite resource building is expensive. Build during cook or at load time, not every frame.
+- **Not all platforms support Nanite.** The renderer falls back to the traditional LOD pipeline on unsupported hardware and platforms (mobile, consoles with lower feature sets).
+- **No dynamic mesh support.** You cannot stream partial updates to Nanite resources. If geometry changes, you must rebuild and re-set the full `FRealtimeMeshNaniteResources`.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="LOD Example" icon="chart-line" href="/guides/lod-example">
+    Use the traditional LOD pipeline for meshes that update at runtime.
+  </Card>
+  <Card title="Distance Fields and Lumen" icon="sun" href="/guides/distance-fields">
+    Add Lumen GI support to your Nanite or LOD meshes.
+  </Card>
+</CardGroup>

@@ -1,0 +1,131 @@
+---
+title: "Installation"
+description: "Add the Realtime Mesh Component plugin to your Unreal Engine 5 project via the Marketplace or from source."
+---
+
+## Prerequisites
+
+- **Unreal Engine 5.0 or above** (RMC v5.x)
+- A **C++ project** is recommended for full access to the stream builder API. Blueprint-only projects can use the plugin but cannot use the typed `TRealtimeMeshBuilderLocal` templates.
+- A `Plugins/` folder at the root of your `.uproject` (created automatically for source installs)
+
+<Info>
+  RMC v5.x supports UE 5.0 and all subsequent 5.x releases. For UE 4.x projects, see the [GitHub releases](https://github.com/TriAxis-Games/RealtimeMeshComponent/releases) for the matching v4.x branch.
+</Info>
+
+## Installation methods
+
+<Tabs>
+  <Tab title="Marketplace">
+    <Steps>
+      <Step title="Open the Marketplace page">
+        Open the Epic Games Launcher and navigate to the RMC Marketplace page, or use the direct link:
+
+        ```
+        com.epicgames.launcher://ue/marketplace/content/ad0b45a6a31e462aba7cf7c790a9c125
+        ```
+
+        Click **Free** (or **Add to Cart** / **Purchase**) and complete checkout.
+      </Step>
+      <Step title="Add to your engine version">
+        In the Launcher, go to **Library → Vault**. Find **Realtime Mesh Component** and click **Install to Engine**, then select the Unreal Engine version that matches your project.
+      </Step>
+      <Step title="Enable the plugin in your project">
+        Open your project in the Unreal Editor. Go to **Edit → Plugins**, search for **Realtime Mesh Component**, and enable the checkbox. Restart the editor when prompted.
+      </Step>
+      <Step title="Add the module dependency">
+        Open your project's `Build.cs` file (located in `Source/<ProjectName>/`) and add `RealtimeMeshComponent` to your public dependencies:
+
+        ```csharp
+        PublicDependencyModuleNames.AddRange(new string[]
+        {
+            "Core",
+            "CoreUObject",
+            "Engine",
+            "RealtimeMeshComponent"
+        });
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="From source (GitHub)">
+    <Steps>
+      <Step title="Clone the repository">
+        Clone the RMC repository into the `Plugins/` folder of your project. Create the `Plugins/` folder first if it does not exist.
+
+        ```bash
+        cd /path/to/YourProject
+        mkdir -p Plugins
+        git clone https://github.com/TriAxis-Games/RealtimeMeshComponent.git Plugins/RealtimeMeshComponent
+        ```
+
+        <Warning>
+          Make sure you check out the branch or tag that matches your engine version. The `main` branch targets the latest UE5 release.
+        </Warning>
+      </Step>
+      <Step title="Register the plugin in your .uproject">
+        Open your `.uproject` file in a text editor and add the plugin entry to the `Plugins` array:
+
+        ```json
+        {
+          "FileVersion": 3,
+          "EngineAssociation": "5.4",
+          "Category": "",
+          "Description": "",
+          "Modules": [ ... ],
+          "Plugins": [
+            {
+              "Name": "RealtimeMeshComponent",
+              "Enabled": true
+            }
+          ]
+        }
+        ```
+      </Step>
+      <Step title="Regenerate project files">
+        Right-click your `.uproject` file in Explorer (Windows) or Finder (macOS) and select **Generate Visual Studio project files** (Windows) or **Generate Xcode project** (macOS).
+
+        Alternatively, from the command line:
+
+        ```bash
+        # Windows (adjust path to your UE install)
+        "C:/Program Files/Epic Games/UE_5.4/Engine/Binaries/DotNET/UnrealBuildTool/UnrealBuildTool.exe" \
+          -projectfiles -project="/path/to/YourProject.uproject" -game -rocket -progress
+        ```
+      </Step>
+      <Step title="Add the module dependency">
+        Open your project's `Build.cs` file (located in `Source/<ProjectName>/`) and add `RealtimeMeshComponent` to your public dependencies:
+
+        ```csharp
+        PublicDependencyModuleNames.AddRange(new string[]
+        {
+            "Core",
+            "CoreUObject",
+            "Engine",
+            "RealtimeMeshComponent"
+        });
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Verifying the installation
+
+1. **Compile the project.** In the Unreal Editor toolbar, click **Compile** (or press **Ctrl+Alt+F7** / **Cmd+Option+F7** on macOS). The output log should show no errors referencing `RealtimeMeshComponent`.
+2. **Open a level.** The editor should load without crash. If it crashes on startup, verify the plugin is enabled in **Edit → Plugins** and that `RealtimeMeshComponent` is in your `PublicDependencyModuleNames`.
+3. **Place a Realtime Mesh Actor.** In the **Place Actors** panel, search for `RealtimeMeshActor` and drag one into the viewport. If the actor appears and can be selected, the plugin is installed correctly.
+
+<Tip>
+  If IntelliSense or the compiler cannot find `#include "RealtimeMeshSimple.h"`, check that your `Build.cs` includes `RealtimeMeshComponent` in `PublicDependencyModuleNames` **and** that you have regenerated project files after adding the plugin.
+</Tip>
+
+## Supported engine versions
+
+| RMC version | Unreal Engine versions |
+|---|---|
+| v5.x (current) | UE 5.0 and above |
+| v4.1 | UE 4.23+ |
+| v4.0 | UE 4.20+ |
+
+For the full release history, see the [GitHub releases page](https://github.com/TriAxis-Games/RealtimeMeshComponent/releases).

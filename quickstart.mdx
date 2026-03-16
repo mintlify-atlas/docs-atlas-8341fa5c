@@ -1,80 +1,213 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Create your first runtime procedural mesh in under five minutes."
 ---
 
-## Get started in three steps
+This guide walks you through creating a simple procedural mesh using the Realtime Mesh Component. You will build a two-sided triangle with vertex colors — the canonical RMC "hello world."
 
-Get your documentation site running locally and make your first customization.
+<Tabs>
+  <Tab title="C++">
 
-### Step 1: Set up your local environment
+<Steps>
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Step title="Create an actor class">
 
-### Step 2: Deploy your changes
+Create a new C++ class inheriting from `ARealtimeMeshActor`. In your header file:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+```cpp MyProceduralMeshActor.h
+#pragma once
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+#include "CoreMinimal.h"
+#include "RealtimeMeshActor.h"
+#include "MyProceduralMeshActor.generated.h"
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+UCLASS()
+class MYPROJECT_API AMyProceduralMeshActor : public ARealtimeMeshActor
+{
+    GENERATED_BODY()
 
-### Step 3: Go live
+protected:
+    virtual void OnGenerateMesh_Implementation() override;
+};
+```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+</Step>
+
+<Step title="Include the required headers">
+
+In your `.cpp` file, include the RMC headers:
+
+```cpp MyProceduralMeshActor.cpp
+#include "MyProceduralMeshActor.h"
+#include "RealtimeMeshSimple.h"
+
+using namespace RealtimeMesh;
+```
+
+</Step>
+
+<Step title="Implement OnGenerateMesh">
+
+Implement `OnGenerateMesh_Implementation`. This is called whenever the mesh needs to be rebuilt:
+
+```cpp MyProceduralMeshActor.cpp
+void AMyProceduralMeshActor::OnGenerateMesh_Implementation()
+{
+    Super::OnGenerateMesh_Implementation();
+
+    // Initialize to URealtimeMeshSimple — the standard mesh type
+    URealtimeMeshSimple* RealtimeMesh =
+        GetRealtimeMeshComponent()->InitializeRealtimeMesh<URealtimeMeshSimple>();
+
+    // StreamSet holds all vertex/index buffers
+    FRealtimeMeshStreamSet StreamSet;
+
+    // Builder with: uint16 indices, FPackedNormal tangents, FVector2DHalf UVs, 1 UV channel
+    TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 1> Builder(StreamSet);
+
+    // Enable the data streams we want
+    Builder.EnableTangents();
+    Builder.EnableTexCoords();
+    Builder.EnableColors();
+    Builder.EnablePolyGroups(); // allows multiple sections per stream set
+
+    // Add vertices with position, normal, tangent, color, UV
+    int32 V0 = Builder.AddVertex(FVector3f(-50.0f, 0.0f, 0.0f))
+        .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f))
+        .SetColor(FColor::Red)
+        .SetTexCoord(FVector2f(0.0f, 0.0f));
+
+    int32 V1 = Builder.AddVertex(FVector3f(0.0f, 0.0f, 100.0f))
+        .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f))
+        .SetColor(FColor::Green)
+        .SetTexCoord(FVector2f(0.5f, 1.0f));
+
+    int32 V2 = Builder.AddVertex(FVector3f(50.0f, 0.0f, 0.0f))
+        .SetNormalAndTangent(FVector3f(0.0f, -1.0f, 0.0f), FVector3f(1.0f, 0.0f, 0.0f))
+        .SetColor(FColor::Blue)
+        .SetTexCoord(FVector2f(1.0f, 0.0f));
+
+    // Add triangles — the last argument is the poly group index (maps to a material section)
+    Builder.AddTriangle(V0, V1, V2, 0); // front face → poly group 0
+    Builder.AddTriangle(V2, V1, V0, 1); // back face  → poly group 1
+
+    // Set up material slots
+    RealtimeMesh->SetupMaterialSlot(0, "PrimaryMaterial");
+    RealtimeMesh->SetupMaterialSlot(1, "SecondaryMaterial");
+
+    // Create the section group key — identifies this group within LOD 0
+    const FRealtimeMeshSectionGroupKey GroupKey =
+        FRealtimeMeshSectionGroupKey::Create(0, FName("TestTriangle"));
+
+    // Create section keys tied to poly groups
+    const FRealtimeMeshSectionKey Section0 =
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 0);
+    const FRealtimeMeshSectionKey Section1 =
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 1);
+
+    // Upload the stream set to the GPU
+    RealtimeMesh->CreateSectionGroup(GroupKey, StreamSet);
+
+    // Assign each poly group section to its material slot
+    RealtimeMesh->UpdateSectionConfig(Section0, FRealtimeMeshSectionConfig(0));
+    RealtimeMesh->UpdateSectionConfig(Section1, FRealtimeMeshSectionConfig(1));
+}
+```
+
+</Step>
+
+<Step title="Add a material">
+
+In the editor, select your actor and assign materials to the **PrimaryMaterial** and **SecondaryMaterial** slots in the Details panel. Any material works — use a simple vertex color material to see the red/green/blue gradient.
+
+</Step>
+
+<Step title="Place the actor in the level">
+
+Compile your project, then drag your `AMyProceduralMeshActor` class from the Content Browser into the level. The triangle will appear immediately.
+
+</Step>
+
+</Steps>
+
+<Tip>
+  `ARealtimeMeshActor` also exposes `bDeferGeneration` and `bFrozen` properties. Set `bDeferGeneration = true` to avoid triggering `OnGenerateMesh` on every construction script call while dragging in the editor.
+</Tip>
+
+  </Tab>
+
+  <Tab title="Blueprint">
+
+<Steps>
+
+<Step title="Create a Blueprint class">
+
+In the Content Browser, create a new **Blueprint Class** and set the parent class to **RealtimeMeshActor**. Name it `BP_MyMesh`.
+
+</Step>
+
+<Step title="Override OnGenerateMesh">
+
+Open the Blueprint editor. In the **My Blueprint** panel, find **Functions** → **Override** → select **OnGenerateMesh**. This event fires whenever the mesh needs to be rebuilt.
+
+</Step>
+
+<Step title="Build the mesh using MakeMeshBuilder">
+
+From the **OnGenerateMesh** event, call **MakeMeshBuilder** on `self`. Configure it:
+
+- **Wanted Tangents**: Normal
+- **Wanted Tex Coords**: Normal  
+- **Wants 32 Bit Indices**: false
+- **Wanted Poly Group Type**: Normal
+- **Wants Colors**: true
+- **Wanted Tex Coord Channels**: 1
+
+</Step>
+
+<Step title="Add vertices and triangles">
+
+On the builder, call:
+- **AddVertex** with a position → call **Set Normal And Tangent**, **Set Color**, **Set Tex Coord** on the result
+- Repeat for each vertex
+- Call **AddTriangle** with three vertex indices and a poly group index
+
+</Step>
+
+<Step title="Create the section group">
+
+Get the **Realtime Mesh Component** → call **Initialize Realtime Mesh (Simple)** → then call **Create Section Group** with a **Section Group Key** and a **Stream Set** (from **Make Stream Set** + the builder's output).
+
+</Step>
+
+</Steps>
+
+  </Tab>
+</Tabs>
+
+## What you built
+
+You created a two-sided triangle procedural mesh using the `TRealtimeMeshBuilderLocal` API (C++) or `MakeMeshBuilder` (Blueprint). The key concepts illustrated:
+
+- `URealtimeMeshSimple` — the standard mesh data object
+- `FRealtimeMeshStreamSet` — the container for typed vertex/index buffers
+- `TRealtimeMeshBuilderLocal` — a type-safe builder that fills the stream set
+- `FRealtimeMeshSectionGroupKey` + `FRealtimeMeshSectionKey` — hierarchical identifiers for the mesh's LOD → SectionGroup → Section tree
+- Poly groups — a way to have multiple material sections within a single stream set
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Core Concepts" icon="book" href="/concepts/architecture">
+    Understand the full architecture and data model of the RMC.
+  </Card>
+  <Card title="Collision Setup" icon="shield" href="/guides/collision-setup">
+    Add physics collision to your procedural mesh.
+  </Card>
+  <Card title="LOD Example" icon="layer-group" href="/guides/lod-example">
+    Create multiple LOD levels for performance at distance.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/realtime-mesh-simple">
+    Full URealtimeMeshSimple method reference.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

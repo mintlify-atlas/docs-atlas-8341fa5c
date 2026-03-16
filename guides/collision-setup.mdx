@@ -1,0 +1,257 @@
+---
+title: "Setting Up Collision"
+description: "Configure simple and complex collision on a URealtimeMeshSimple, including async cooking and simple geometry shapes."
+---
+
+RMC supports two types of collision, mirroring the pattern you'll recognise from `UStaticMeshComponent`:
+
+- **Simple collision** — lightweight analytical shapes (spheres, boxes, capsules, convex hulls) used for gameplay queries and physics simulation.
+- **Complex collision** — per-triangle mesh collision generated directly from the render geometry of one or more sections.
+
+You can use either type independently, or combine them.
+
+## Collision configuration
+
+`FRealtimeMeshCollisionConfiguration` controls the overall behaviour. Its fields and defaults are:
+
+```cpp
+struct FRealtimeMeshCollisionConfiguration
+{
+    // Use the complex triangle mesh for simple collision queries (default: true)
+    bool bUseComplexAsSimpleCollision;  // default: true
+
+    // Cook collision on a background thread (default: true)
+    bool bUseAsyncCook;                 // default: true
+
+    // Skip full cooking; useful for meshes updated every frame (default: false)
+    bool bShouldFastCookMeshes;         // default: false
+
+    // Reverse triangle winding in the collision mesh (default: false)
+    bool bFlipNormals;                  // default: false
+
+    // Mark the mesh as deformable for Chaos (default: false)
+    bool bDeformableMesh;               // default: false
+
+    // Merge all collision meshes into one before cooking (default: false)
+    bool bMergeAllMeshes;               // default: false
+};
+```
+
+### Applying the configuration
+
+```cpp
+FRealtimeMeshCollisionConfiguration Config;
+Config.bUseComplexAsSimpleCollision = false;  // use separate simple shapes
+Config.bUseAsyncCook = true;
+
+RealtimeMesh->SetCollisionConfig(Config);
+```
+
+`SetCollisionConfig` returns a `TFuture<ERealtimeMeshCollisionUpdateResult>` so you can react when cooking completes:
+
+```cpp
+RealtimeMesh->SetCollisionConfig(Config).Next([](ERealtimeMeshCollisionUpdateResult Result)
+{
+    if (Result == ERealtimeMeshCollisionUpdateResult::Updated)
+    {
+        UE_LOG(LogTemp, Log, TEXT("Collision cooked successfully."));
+    }
+});
+```
+
+### ERealtimeMeshCollisionUpdateResult values
+
+| Value | Meaning |
+|-------|---------|
+| `Unknown` | Result not yet determined |
+| `Updated` | Collision was rebuilt and applied |
+| `Ignored` | No rebuild was needed (data was unchanged) |
+| `Error` | Cooking failed |
+
+## Simple collision geometry
+
+Simple geometry is stored in `FRealtimeMeshSimpleGeometry`, which holds named sets of analytical shapes. Construct it, populate it, then call `SetSimpleGeometry`.
+
+### Available shape types
+
+```cpp
+// All shapes inherit FRealtimeMeshCollisionShape which provides:
+// FName Name, FVector Center, FRotator Rotation, bool bContributesToMass
+
+FRealtimeMeshCollisionSphere Sphere;
+Sphere.Name   = "MainSphere";
+Sphere.Center = FVector::ZeroVector;
+Sphere.Radius = 50.0f;
+
+FRealtimeMeshCollisionBox Box;
+Box.Name    = "MainBox";
+Box.Extents = FVector(50.0f, 50.0f, 50.0f);
+
+FRealtimeMeshCollisionCapsule Capsule;
+Capsule.Name   = "MainCapsule";
+Capsule.Radius = 30.0f;
+Capsule.Length = 80.0f;
+
+// Convex hull — provide arbitrary point cloud, RMC cooks it
+FRealtimeMeshCollisionConvex Convex;
+Convex.Name = "ConvexHull";
+Convex.SetVertices({
+    FVector(-50, -50, 0),
+    FVector( 50, -50, 0),
+    FVector( 50,  50, 0),
+    FVector(-50,  50, 0),
+    FVector(  0,   0, 100),
+});
+```
+
+### Assembling FRealtimeMeshSimpleGeometry
+
+```cpp
+FRealtimeMeshSimpleGeometry SimpleGeometry;
+SimpleGeometry.Spheres.Add(Sphere);
+SimpleGeometry.Boxes.Add(Box);
+SimpleGeometry.Capsules.Add(Capsule);
+SimpleGeometry.ConvexHulls.Add(Convex);
+
+RealtimeMesh->SetSimpleGeometry(SimpleGeometry);
+```
+
+Like `SetCollisionConfig`, `SetSimpleGeometry` returns `TFuture<ERealtimeMeshCollisionUpdateResult>`.
+
+### Blueprint
+
+Both `SetCollisionConfig` and `SetSimpleGeometry` are `BlueprintCallable`. Their Blueprint variants accept an `OnComplete` delegate callback instead of returning a `TFuture`:
+
+```
+RealtimeMesh → SetCollisionConfig(Config, OnComplete)
+RealtimeMesh → SetSimpleGeometry(SimpleGeometry, OnComplete)
+```
+
+## Complex collision from mesh sections
+
+Complex collision is derived automatically from your render geometry. There are two ways to enable it:
+
+### Per-section (recommended)
+
+When calling `UpdateSectionConfig`, set `bShouldCreateCollision = true`:
+
+```cpp
+RealtimeMesh->UpdateSectionConfig(
+    PolyGroup0SectionKey,
+    FRealtimeMeshSectionConfig(0),
+    /*bShouldCreateCollision=*/ true
+);
+```
+
+Only the sections you mark this way contribute to the complex collision mesh. This lets you skip non-collidable decoration geometry.
+
+### Via CreateSection
+
+```cpp
+RealtimeMesh->CreateSection(
+    SectionKey,
+    FRealtimeMeshSectionConfig(0),
+    StreamRange,
+    /*bShouldCreateCollision=*/ true
+);
+```
+
+### Using bUseComplexAsSimpleCollision
+
+When `bUseComplexAsSimpleCollision = true` (the default), the complex triangle mesh is also used for simple collision queries. If you need both independent simple shapes and complex collision from render geometry, set it to `false` and supply a `FRealtimeMeshSimpleGeometry`.
+
+<Note>
+For purely static decoration meshes that never need hit tests or physics, you can set `bShouldCreateCollision = false` on every section and skip collision entirely to save cooking time.
+</Note>
+
+## Async cooking
+
+With `bUseAsyncCook = true`, collision cooking runs on a background thread and the game thread is not blocked. The returned `TFuture` resolves when cooking finishes:
+
+```cpp
+FRealtimeMeshCollisionConfiguration AsyncConfig;
+AsyncConfig.bUseAsyncCook = true;
+
+TFuture<ERealtimeMeshCollisionUpdateResult> Future =
+    RealtimeMesh->SetCollisionConfig(AsyncConfig);
+
+Future.Next([](ERealtimeMeshCollisionUpdateResult Result)
+{
+    // Called on the game thread after cooking completes
+    switch (Result)
+    {
+        case ERealtimeMeshCollisionUpdateResult::Updated:
+            // Collision is live
+            break;
+        case ERealtimeMeshCollisionUpdateResult::Error:
+            UE_LOG(LogTemp, Warning, TEXT("Collision cook failed"));
+            break;
+        default:
+            break;
+    }
+});
+```
+
+<Warning>
+If `bUseAsyncCook = false`, collision is cooked synchronously on the game thread. For large meshes, this can cause noticeable hitches. Always prefer async cooking in production.
+</Warning>
+
+## Fast cook for frequently updated meshes
+
+Set `bShouldFastCookMeshes = true` for meshes that change every frame (for example, fluid surfaces or cloth). Fast cooking skips some accuracy steps in Chaos but is significantly faster:
+
+```cpp
+FRealtimeMeshCollisionConfiguration FastConfig;
+FastConfig.bUseAsyncCook        = true;
+FastConfig.bShouldFastCookMeshes = true;
+FastConfig.bDeformableMesh       = true;  // required for Chaos deformable support
+
+RealtimeMesh->SetCollisionConfig(FastConfig);
+```
+
+## Full example
+
+```cpp
+void AMyActor::SetupCollision(URealtimeMeshSimple* RealtimeMesh)
+{
+    // --- Configuration ---
+    FRealtimeMeshCollisionConfiguration Config;
+    Config.bUseComplexAsSimpleCollision = false;
+    Config.bUseAsyncCook                = true;
+
+    // --- Simple geometry ---
+    FRealtimeMeshCollisionSphere Sphere;
+    Sphere.Name   = "BoundingSphere";
+    Sphere.Radius = 60.0f;
+
+    FRealtimeMeshSimpleGeometry SimpleGeometry;
+    SimpleGeometry.Spheres.Add(Sphere);
+
+    // --- Apply ---
+    RealtimeMesh->SetCollisionConfig(Config).Next([](ERealtimeMeshCollisionUpdateResult Result)
+    {
+        ensure(Result == ERealtimeMeshCollisionUpdateResult::Updated);
+    });
+
+    RealtimeMesh->SetSimpleGeometry(SimpleGeometry);
+
+    // --- Enable complex collision on a section ---
+    const FRealtimeMeshSectionGroupKey GroupKey =
+        FRealtimeMeshSectionGroupKey::Create(0, FName("MainMesh"));
+    const FRealtimeMeshSectionKey SectionKey =
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey, 0);
+
+    RealtimeMesh->UpdateSectionConfig(SectionKey, FRealtimeMeshSectionConfig(0), /*bShouldCreateCollision=*/ true);
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Creating a Basic Mesh" icon="cube" href="/guides/basic-mesh">
+    Build the render geometry that your collision wraps.
+  </Card>
+  <Card title="LOD Example" icon="chart-line" href="/guides/lod-example">
+    Reduce draw calls and triangle counts at distance.
+  </Card>
+</CardGroup>

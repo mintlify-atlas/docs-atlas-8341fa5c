@@ -1,0 +1,123 @@
+---
+title: "URealtimeMesh"
+description: "Abstract base class for all Realtime Mesh types."
+---
+
+`URealtimeMesh` is the abstract base `UObject` from which all concrete mesh types derive. It owns the render data, collision body, and material slot registry. You never instantiate this class directly — use `URealtimeMeshSimple` for standard procedural meshes.
+
+```
+Inheritance: UObject → URealtimeMesh
+UCLASS: BlueprintType, Blueprintable, Abstract, ClassGroup=Rendering
+```
+
+<Info>
+  For runtime procedural geometry, use `URealtimeMeshSimple`. `URealtimeMesh` documents the shared interface that all mesh types expose.
+</Info>
+
+---
+
+## Events
+
+```cpp
+DECLARE_EVENT_OneParam(URealtimeMesh, FBoundsChangedEvent, URealtimeMesh*);
+DECLARE_EVENT_TwoParams(URealtimeMesh, FRenderDataChangedEvent, URealtimeMesh*, bool /*bShouldProxyRecreate*/);
+DECLARE_EVENT_TwoParams(URealtimeMesh, FCollisionBodyUpdated, URealtimeMesh*, UBodySetup*);
+```
+
+| Event | Fired when |
+|---|---|
+| `OnBoundsChanged()` | The mesh's local bounds change. |
+| `OnRenderDataChanged()` | Render data is updated; `bShouldProxyRecreate` signals whether a full proxy recreation is needed. |
+| `OnCollisionBodyUpdated()` | A new `UBodySetup` has been cooked and applied. |
+
+`URealtimeMeshComponent` subscribes to these events automatically when `SetRealtimeMesh` is called.
+
+---
+
+## LOD Management
+
+```cpp
+FRealtimeMeshLODKey AddLOD(const FRealtimeMeshLODConfig& Config);
+void UpdateLODConfig(FRealtimeMeshLODKey LODKey, const FRealtimeMeshLODConfig& Config);
+void RemoveTrailingLOD();
+```
+
+`URealtimeMeshSimple` manages LODs automatically when you call `CreateSectionGroup`. Use these methods directly only when you need explicit LOD configuration.
+
+---
+
+## Material Slots
+
+```cpp
+void SetupMaterialSlot(int32 MaterialSlot, FName SlotName, UMaterialInterface* InMaterial = nullptr);
+int32 GetMaterialIndex(FName MaterialSlotName) const;
+FName GetMaterialSlotName(int32 Index) const;
+bool IsMaterialSlotNameValid(FName MaterialSlotName) const;
+FRealtimeMeshMaterialSlot GetMaterialSlot(int32 SlotIndex) const;
+int32 GetNumMaterials() const;
+TArray<FName> GetMaterialSlotNames() const;
+TArray<FRealtimeMeshMaterialSlot> GetMaterialSlots() const;
+UMaterialInterface* GetMaterial(int32 SlotIndex) const;
+```
+
+Material slots are stored on the mesh object, not on the component. `URealtimeMeshComponent` reads them via `GetMaterial` and `GetNumMaterials`. Always call `SetupMaterialSlot` before assigning material indices to sections.
+
+---
+
+## Body Setup
+
+```cpp
+UBodySetup* GetBodySetup() const;
+bool CalcTexCoordAtLocation(
+    const FVector& BodySpaceLocation,
+    int32 ElementIndex,
+    int32 FaceIndex,
+    int32 UVChannel,
+    FVector2D& UV
+) const;
+```
+
+---
+
+## Serialization
+
+```cpp
+bool ShouldSerializeMeshData() const;
+void SetShouldSerializeMeshData(bool bNewShouldSerializeMeshData);
+```
+
+Controls whether CPU-side stream data is included when the asset is saved. Enable this if you need mesh data to survive a Cook/Save cycle without regeneration at load time.
+
+---
+
+## Reset
+
+```cpp
+virtual void Reset();
+```
+
+Clears all mesh data. Subclass implementations (e.g., `URealtimeMeshSimple::Reset`) clear LODs, sections, streams, and collision.
+
+---
+
+## OnGenerateMesh Event
+
+```cpp
+UFUNCTION(BlueprintCallable, BlueprintImplementableEvent, Category = "Components|RealtimeMesh|Events")
+void OnGenerateMesh(URealtimeMesh* TargetMesh);
+```
+
+A Blueprint-implementable event on the mesh object itself (distinct from `ARealtimeMeshActor::OnGenerateMesh`). Override this in a Blueprint subclass of `URealtimeMeshSimple` to generate mesh data directly on the mesh object.
+
+---
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="URealtimeMeshSimple" href="/api/realtime-mesh-simple">
+    The concrete implementation used for most procedural meshes.
+  </Card>
+  <Card title="URealtimeMeshComponent" href="/api/realtime-mesh-component">
+    The scene component that renders this mesh.
+  </Card>
+</CardGroup>

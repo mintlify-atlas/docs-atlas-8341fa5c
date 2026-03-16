@@ -1,0 +1,186 @@
+---
+title: "LOD system"
+description: "How the Realtime Mesh Component manages multiple levels of detail, screen-size thresholds, and the relationship between LODs and collision."
+---
+
+Levels of detail (LODs) allow the RMC to swap in a lower-complexity mesh representation as the mesh moves farther from the camera. This is the same screen-size driven LOD selection used by static meshes in Unreal Engine.
+
+## How LODs work in RMC
+
+Each LOD is an independent collection of section groups. LOD 0 is the highest-detail level, rendered when the mesh is closest to the camera. Higher-indexed LODs are rendered as the mesh appears smaller on screen.
+
+The selection threshold is the `ScreenSize` field of `FRealtimeMeshLODConfig`:
+
+```cpp
+// RealtimeMeshLODConfig.h
+struct FRealtimeMeshLODConfig
+{
+    bool  bIsVisible;  // Toggle the entire LOD on or off
+    float ScreenSize;  // Normalised screen size [0, 1]; LOD activates below this value
+};
+```
+
+`ScreenSize` is a fraction of the viewport height. A value of `0.25` means the LOD activates when the mesh occupies less than 25% of the viewport. LOD 0's `ScreenSize` is ignored — it is always the fallback when no other LOD threshold is met.
+
+<Note>
+  LOD selection in RMC uses the same algorithm as Unreal Engine's static mesh LOD system. Screen size values you are familiar with from static mesh editor settings translate directly.
+</Note>
+
+## FRealtimeMeshLODConfig fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `bIsVisible` | `bool` | `true` | When false, this LOD never renders regardless of screen size. |
+| `ScreenSize` | `float` | `0.0` | Screen-size threshold. LOD activates when screen coverage falls below this value. |
+
+## Creating multiple LODs
+
+LODs are added in order of decreasing detail. You add them through `URealtimeMesh::AddLOD`, which returns the `FRealtimeMeshLODKey` for the newly created LOD.
+
+After adding the LOD, you populate it with section groups the same way you do for LOD 0 — just use the returned key when constructing your `FRealtimeMeshSectionGroupKey`.
+
+```cpp
+using namespace RealtimeMesh;
+
+URealtimeMeshSimple* RMesh =
+    GetRealtimeMeshComponent()->InitializeRealtimeMesh<URealtimeMeshSimple>();
+
+// LOD 0 is always added implicitly when the mesh is initialized.
+// Call AddLOD for each additional LOD.
+FRealtimeMeshLODKey LOD1Key = RMesh->AddLOD(FRealtimeMeshLODConfig(0.25f));
+FRealtimeMeshLODKey LOD2Key = RMesh->AddLOD(FRealtimeMeshLODConfig(0.05f));
+```
+
+## Building geometry for each LOD
+
+Each LOD gets its own section group with independent vertex and index streams. Use the `FRealtimeMeshLODKey` returned by `AddLOD` (or `0` for LOD 0) when constructing section group keys:
+
+```cpp
+// ---- LOD 0: high-resolution mesh (1024 triangles) ----
+{
+    FRealtimeMeshStreamSet StreamSet0;
+    TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 1> Builder(StreamSet0);
+    Builder.EnableTangents();
+    Builder.EnableTexCoords();
+    Builder.EnablePolyGroups();
+
+    // ... add ~1024 triangles ...
+
+    const FRealtimeMeshSectionGroupKey GroupKey0 =
+        FRealtimeMeshSectionGroupKey::Create(0, FName("MainGeometry"));
+    RMesh->CreateSectionGroup(GroupKey0, StreamSet0);
+    RMesh->UpdateSectionConfig(
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey0, 0),
+        FRealtimeMeshSectionConfig(0));
+}
+
+// ---- LOD 1: low-resolution mesh (64 triangles) ----
+{
+    FRealtimeMeshStreamSet StreamSet1;
+    TRealtimeMeshBuilderLocal<uint16, FPackedNormal, FVector2DHalf, 1> Builder(StreamSet1);
+    Builder.EnableTangents();
+    Builder.EnableTexCoords();
+    Builder.EnablePolyGroups();
+
+    // ... add ~64 triangles ...
+
+    // Use LOD1Key (index 1) for the section group key
+    const FRealtimeMeshSectionGroupKey GroupKey1 =
+        FRealtimeMeshSectionGroupKey::Create(LOD1Key, FName("MainGeometry"));
+    RMesh->CreateSectionGroup(GroupKey1, StreamSet1);
+    RMesh->UpdateSectionConfig(
+        FRealtimeMeshSectionKey::CreateForPolyGroup(GroupKey1, 0),
+        FRealtimeMeshSectionConfig(0));
+}
+```
+
+<Tip>
+  Reuse the same material slot indices across LODs. Each LOD references the same mesh-level material slot array, so material assignments on the component apply to all LODs automatically.
+</Tip>
+
+## LOD best practices
+
+<AccordionGroup>
+  <Accordion title="Screen size thresholds">
+    Start with common static mesh values as a baseline:
+
+    | LOD | ScreenSize | Typical use |
+    |---|---|---|
+    | 0 | — | Full-detail, close range |
+    | 1 | 0.25 | Mid-range, ~25% viewport height |
+    | 2 | 0.05 | Far-range, ~5% viewport height |
+    | 3 | 0.01 | Very distant, nearly a pixel |
+
+    Adjust based on how prominently the mesh appears in your scene.
+  </Accordion>
+
+  <Accordion title="Complexity reduction per LOD">
+    Aim for significant polygon reduction between LODs — a factor of 4–8× is common:
+
+    - LOD 0: 100% triangle count
+    - LOD 1: 25% triangle count
+    - LOD 2: 6% triangle count
+
+    For very distant LODs, a single billboard quad is often sufficient.
+  </Accordion>
+
+  <Accordion title="UV and tangent precision">
+    Lower LODs can use reduced UV and tangent precision. Switching from `FVector2f` UVs to `FVector2DHalf` and from `FVector4f` tangents to `FPackedNormal` at LOD 1 halves the vertex buffer size with minimal visual difference at distance.
+  </Accordion>
+
+  <Accordion title="Reusing streams across LODs">
+    You cannot share an `FRealtimeMeshStreamSet` between LODs. Each LOD must have its own stream set. You can however reuse the same `FRealtimeMeshSectionGroupConfig` and `FRealtimeMeshSectionConfig` instances.
+  </Accordion>
+</AccordionGroup>
+
+## LODs and collision
+
+By default, collision data is generated from **LOD 0**. When you call `UpdateSectionConfig` with `bShouldCreateCollision = true`, only sections in LOD 0 contribute to the complex collision mesh:
+
+```cpp
+// Enable complex collision for a section in LOD 0
+RMesh->UpdateSectionConfig(
+    SectionKey,
+    FRealtimeMeshSectionConfig(0),
+    /*bShouldCreateCollision=*/ true);
+```
+
+<Warning>
+  Enabling `bShouldCreateCollision` on sections in higher LODs (LOD 1, LOD 2, etc.) has no effect. Collision is always derived from LOD 0 geometry.
+</Warning>
+
+For simple collision shapes (spheres, capsules, boxes, convex hulls), use `SetSimpleGeometry` on `URealtimeMeshSimple` instead of relying on the complex mesh. Simple collision is significantly cheaper and does not depend on LOD at all.
+
+## Removing LODs
+
+You can remove the trailing (highest-index) LOD with `RemoveTrailingLOD`:
+
+```cpp
+// Remove the last LOD added
+RMesh->RemoveTrailingLOD();
+```
+
+LODs can only be removed from the end of the array. To completely reset all LODs, call `Reset()` on the mesh and rebuild from scratch.
+
+## Forcing a specific LOD
+
+`FRealtimeMeshConfig` has a `ForcedLOD` field. Set it to a specific LOD index to bypass screen-size selection and always render that LOD:
+
+```cpp
+// RealtimeMeshConfig.h
+struct FRealtimeMeshConfig
+{
+    int32 ForcedLOD;  // INDEX_NONE disables forcing; set to 0, 1, etc. to force a level
+};
+```
+
+This is useful during development to inspect individual LODs without moving the camera.
+
+<CardGroup cols={2}>
+  <Card title="Architecture overview" icon="diagram-project" href="/concepts/architecture">
+    How LOD data flows from the game thread to the GPU proxy.
+  </Card>
+  <Card title="LOD example guide" icon="book" href="/guides/lod-example">
+    Step-by-step walkthrough of building a mesh with two LODs.
+  </Card>
+</CardGroup>
