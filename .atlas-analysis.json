@@ -1,0 +1,135 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Realtime Mesh Component",
+  "projectDescription": "An Unreal Engine 5 plugin that provides a high-performance, runtime mesh component for procedural geometry generation, dynamic mesh updates, and collision — a feature-rich replacement for the built-in ProceduralMeshComponent.",
+  "theme": "aspen",
+  "primaryColor": "#2c2c2c",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/mesh-hierarchy",
+              "concepts/data-streams",
+              "concepts/lod-system"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/basic-mesh",
+              "guides/blueprint-usage",
+              "guides/collision-setup",
+              "guides/multiple-uvs",
+              "guides/lod-example",
+              "guides/nanite-support",
+              "guides/distance-fields"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/stream-builder",
+              "advanced/direct-mesh-access",
+              "advanced/async-updates",
+              "advanced/networking"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Components",
+            "pages": [
+              "api/realtime-mesh-component",
+              "api/realtime-mesh-actor"
+            ]
+          },
+          {
+            "group": "Mesh Types",
+            "pages": [
+              "api/realtime-mesh-simple",
+              "api/realtime-mesh"
+            ]
+          },
+          {
+            "group": "Data & Streams",
+            "pages": [
+              "api/data-streams",
+              "api/stream-builder",
+              "api/mesh-builder",
+              "api/stream-types"
+            ]
+          },
+          {
+            "group": "Collision",
+            "pages": [
+              "api/collision-config",
+              "api/simple-geometry",
+              "api/complex-geometry"
+            ]
+          },
+          {
+            "group": "Blueprint Library",
+            "pages": [
+              "api/blueprint-function-library",
+              "api/basic-shape-tools"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "High-performance runtime mesh rendering as a replacement for ProceduralMeshComponent",
+    "LOD (Level of Detail) support for procedural meshes",
+    "Async mesh updates with future-based completion callbacks",
+    "Full Blueprint support for mesh creation and modification",
+    "Complex and simple collision generation from mesh data",
+    "Nanite support for high-polygon procedural geometry",
+    "Lumen distance field and card representation support",
+    "Flexible stream-based mesh data API with type-safe builders",
+    "Network replication support for mesh components",
+    "Polygon group / multi-material section support"
+  ],
+  "publicApiSurface": [
+    "URealtimeMeshComponent",
+    "ARealtimeMeshActor",
+    "URealtimeMeshSimple",
+    "URealtimeMesh",
+    "URealtimeMeshLocalBuilder",
+    "URealtimeMeshStreamSet",
+    "URealtimeMeshStream",
+    "URealtimeMeshBlueprintFunctionLibrary",
+    "URealtimeMeshBasicShapeTools",
+    "FRealtimeMeshSimple",
+    "FRealtimeMeshSectionGroupSimple",
+    "FRealtimeMeshCollisionConfiguration",
+    "FRealtimeMeshSimpleGeometry",
+    "FRealtimeMeshComplexGeometry",
+    "FRealtimeMeshDistanceField",
+    "FRealtimeMeshCardRepresentation",
+    "FRealtimeMeshSectionKey",
+    "FRealtimeMeshSectionGroupKey",
+    "FRealtimeMeshLODKey",
+    "FRealtimeMeshStreamKey",
+    "FRealtimeMeshStreamRange",
+    "FRealtimeMeshBasicVertex"
+  ]
+}
